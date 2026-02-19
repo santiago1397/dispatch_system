@@ -1,0 +1,94 @@
+
+# Production configuration
+# without reverse proxy (ports exposed directly)
+#
+# Usage:
+#   1. Copy .env.prod.example to .env.prod and fill in values:
+#      cp .env.prod.example .env.prod
+#   2. Run: docker-compose -f docker-compose.prod.yml up -d
+
+services:
+
+  app:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: agents_bots_backend
+    env_file:
+      - .env.prod
+      - ./backend/.env
+    environment:
+      - DEBUG=false
+      - ENVIRONMENT=production
+      - POSTGRES_HOST=db
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8888 --workers 4
+    networks:
+      - backend-internal
+    ports:
+      - "8888:8888"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+  db:
+    image: postgres:16-alpine
+    container_name: agents_bots_db
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-agents_bots}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # NO external ports - only accessible within backend-internal network
+    networks:
+      - backend-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: agents_bots_frontend
+    environment:
+      - NODE_ENV=production
+      - BACKEND_URL=http://app:8888
+      - BACKEND_WS_URL=ws://app:8888
+    networks:
+      - backend-internal
+    ports:
+      - "3333:3333"
+    depends_on:
+      - app
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+networks:
+  backend-internal:
+    driver: bridge
+    internal: true
+
+volumes:
+  postgres_data:

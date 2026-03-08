@@ -819,6 +819,8 @@ fastapi-fullstack new
 
 | Document | Description |
 |----------|-------------|
+| [Structure Guide](docs/structure_guide.md) | Complete template folder structure and where to add code |
+| [GitHub Upload](GITHUB_UPLOAD.md) | Step-by-step: push this template to your GitHub repo |
 | [Architecture](https://github.com/vstorm-co/full-stack-fastapi-nextjs-llm-template/blob/main/docs/architecture.md) | Repository + Service pattern, layered design |
 | [Frontend](https://github.com/vstorm-co/full-stack-fastapi-nextjs-llm-template/blob/main/docs/frontend.md) | Next.js setup, auth, state management |
 | [AI Agent](https://github.com/vstorm-co/full-stack-fastapi-nextjs-llm-template/blob/main/docs/ai-agent.md) | PydanticAI, tools, WebSocket streaming |

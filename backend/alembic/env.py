@@ -11,6 +11,20 @@ from app.db.base import Base
 
 # Import all models here to ensure they are registered with metadata
 from app.db.models.user import User  # noqa: F401
+from app.db.models.session import Session  # noqa: F401
+from app.db.models.item import Item  # noqa: F401
+from app.db.models.conversation import Conversation, Message, ToolCall  # noqa: F401
+from app.db.models.openphone import IncomingMessage  # noqa: F401
+from app.db.models.company import Company  # noqa: F401
+from app.db.models.company_phone_binding import CompanyPhoneBinding  # noqa: F401
+from app.db.models.dispatch_job import DispatchJob  # noqa: F401
+from app.db.models.job import Job  # noqa: F401
+from app.db.models.whatsapp import WhatsappMessage, WhatsappTrackedChat  # noqa: F401
+from app.db.models.app_settings import AppSettings  # noqa: F401
+from app.db.models.technician import Technician  # noqa: F401
+from app.db.models.job_lifecycle_event import JobLifecycleEvent  # noqa: F401
+from app.db.models.alert import Alert  # noqa: F401
+from app.db.models.daily_stats import DailyStatsSnapshot  # noqa: F401
 
 config = context.config
 

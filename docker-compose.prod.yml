@@ -1,35 +1,70 @@
-
-# Production configuration
-# without reverse proxy (ports exposed directly)
+# Production configuration — VPS deployment with native Postgres, Traefik ingress
+#
+# Architecture:
+#   - Backend (FastAPI) and frontend (Next.js standalone) run in Docker
+#   - Postgres runs natively on the host (not in a container)
+#   - Traefik (separate /opt/traefik stack) terminates TLS and routes by Host()
+#   - Both services join the shared `traefik-public` network and expose
+#     internally only — no host ports are published
+#
+# Multi-app coexistence:
+#   - Project name is fixed (name: dispatch_chicago)
+#   - Containers are reachable only via the traefik-public network
+#   - Any new app on the VPS joins the same network and declares its own
+#     Traefik labels — no vhost files, no port publishing
+#
+# Required in .env.prod at the project root:
+#   POSTGRES_HOST=host.docker.internal
+#   POSTGRES_PORT, POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB
+#   SECRET_KEY
+#   OPENAI_API_KEY
+#   CORS_ORIGINS=["https://santiagoproperties.uk","https://www.santiagoproperties.uk"]
+#   NEXT_PUBLIC_WS_URL=wss://api.santiagoproperties.uk
+#
+# Native Postgres must accept connections from the Docker bridge:
+#   postgresql.conf:  listen_addresses = '*'
+#   pg_hba.conf:      host  all  all  172.17.0.0/16  md5
 #
 # Usage:
-#   1. Copy .env.prod.example to .env.prod and fill in values:
-#      cp .env.prod.example .env.prod
-#   2. Run: docker-compose -f docker-compose.prod.yml up -d
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+
+name: dispatch_chicago
 
 services:
-
   app:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: agents_bots_backend
+    image: dispatch_chicago/app:latest
+    container_name: dispatch_app
     env_file:
       - .env.prod
-      - ./backend/.env
     environment:
       - DEBUG=false
       - ENVIRONMENT=production
-      - POSTGRES_HOST=db
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8888 --workers 4
+      - POSTGRES_HOST=host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    expose:
+      - "8888"
     networks:
-      - backend-internal
-    ports:
-      - "8888:8888"
-    depends_on:
-      db:
-        condition: service_healthy
+      - dispatch-net
+      - traefik-public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-public"
+      - "traefik.http.routers.dispatch-api.rule=Host(`api.santiagoproperties.uk`)"
+      - "traefik.http.routers.dispatch-api.entrypoints=websecure"
+      - "traefik.http.routers.dispatch-api.tls=true"
+      - "traefik.http.routers.dispatch-api.tls.certresolver=letsencrypt"
+      - "traefik.http.services.dispatch-api.loadbalancer.server.port=8888"
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8888 --workers 4
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     deploy:
       resources:
         limits:
@@ -39,46 +74,41 @@ services:
           cpus: '0.5'
           memory: 256M
 
-  db:
-    image: postgres:16-alpine
-    container_name: agents_bots_db
-    environment:
-      - POSTGRES_USER=${POSTGRES_USER:-postgres}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB:-agents_bots}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    # NO external ports - only accessible within backend-internal network
-    networks:
-      - backend-internal
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          cpus: '1'
-          memory: 512M
-
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: agents_bots_frontend
+      args:
+        - NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL:-wss://api.santiagoproperties.uk}
+    image: dispatch_chicago/frontend:latest
+    container_name: dispatch_frontend
     environment:
       - NODE_ENV=production
       - BACKEND_URL=http://app:8888
       - BACKEND_WS_URL=ws://app:8888
+      - NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL:-wss://api.santiagoproperties.uk}
+    expose:
+      - "3333"
     networks:
-      - backend-internal
-    ports:
-      - "3333:3333"
+      - dispatch-net
+      - traefik-public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-public"
+      - "traefik.http.routers.dispatch-web.rule=Host(`santiagoproperties.uk`, `www.santiagoproperties.uk`)"
+      - "traefik.http.routers.dispatch-web.entrypoints=websecure"
+      - "traefik.http.routers.dispatch-web.tls=true"
+      - "traefik.http.routers.dispatch-web.tls.certresolver=letsencrypt"
+      - "traefik.http.services.dispatch-web.loadbalancer.server.port=3333"
     depends_on:
-      - app
+      app:
+        condition: service_healthy
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     deploy:
       resources:
         limits:
@@ -86,9 +116,8 @@ services:
           memory: 256M
 
 networks:
-  backend-internal:
+  dispatch-net:
     driver: bridge
-    internal: true
-
-volumes:
-  postgres_data:
+  traefik-public:
+    name: traefik-public
+    external: true

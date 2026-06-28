@@ -35,7 +35,16 @@ class BaseSchema(BaseModel):
 
 
 class TimestampSchema(BaseModel):
-    """Schema with timestamp fields."""
+    """Schema with timestamp fields.
+
+    Carries ``from_attributes=True`` so subclasses can convert SQLAlchemy
+    ORM rows via ``model_validate(orm_obj)``. Without it, every
+    ``*Read`` schema that only inherits from here 500s with "Input
+    should be a valid dictionary or instance of X" because Pydantic
+    refuses to read attributes off the ORM object.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
 
     created_at: datetime
     updated_at: datetime | None = None

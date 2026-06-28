@@ -95,6 +95,14 @@ class BadRequestError(AppException):
     status_code = 400
 
 
+class InvalidTransitionError(AppException):
+    """An illegal Job lifecycle transition was attempted (422)."""
+
+    message = "Invalid lifecycle transition"
+    code = "INVALID_TRANSITION"
+    status_code = 422
+
+
 # === 5xx Server Errors ===
 
 

@@ -21,7 +21,7 @@ def server_cli():
 
 @server_cli.command("run")
 @click.option("--host", default="0.0.0.0", help="Host to bind to")
-@click.option("--port", default=8000, type=int, help="Port to bind to")
+@click.option("--port", default=8888, type=int, help="Port to bind to")
 @click.option("--reload", is_flag=True, help="Enable auto-reload")
 def server_run(host: str, port: int, reload: bool):
     """Run the development server."""
@@ -269,6 +269,82 @@ def user_list():
 
     table = [[u.id, u.email, u.role, u.is_active, u.is_superuser] for u in users]
     click.echo(tabulate(table, headers=["ID", "Email", "Role", "Active", "Superuser"]))
+
+
+@user_cli.command("create-service-account")
+@click.option(
+    "--name",
+    required=True,
+    help="Friendly name (e.g. 'Dispatcher iPhone', 'Laptop test')",
+)
+def user_create_service_account(name: str):
+    """Create a service account for the WhatsApp Chrome extension.
+
+    Generates a one-time API key (``sk_live_<32 hex>``), stores the bcrypt
+    hash and the 12-char prefix, and prints the plaintext to stdout. The
+    plaintext is NEVER persisted and CANNOT be retrieved later — copy it
+    into the extension popup immediately.
+
+    Example:
+        uv run agents_bots user create-service-account --name "Dispatcher iPhone"
+    """
+    import asyncio
+    import secrets
+
+    from app.core.security import hash_api_key
+    from app.db.models.user import User
+    from app.db.session import async_session_maker
+
+    async def _create():
+        async with async_session_maker() as session:
+            # Generate a unique placeholder email so the unique constraint passes.
+            # Service accounts don't log in via email/password, so the value is cosmetic.
+            random_id = secrets.token_hex(8)
+            placeholder_email = f"svc-{random_id}@service.local"
+
+            plaintext_key = "sk_live_" + secrets.token_hex(16)
+            prefix = plaintext_key[:12]
+            key_hash = hash_api_key(plaintext_key)
+
+            user = User(
+                email=placeholder_email,
+                hashed_password=None,
+                full_name=name,
+                is_active=True,
+                is_superuser=False,
+                role="user",
+                is_service_account=True,
+                service_api_key_hash=key_hash,
+                service_api_key_prefix=prefix,
+                service_account_name=name,
+            )
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
+            return user, plaintext_key
+
+    user, plaintext_key = asyncio.run(_create())
+
+    # Print the key with very visible warning boxes. Stdout only — never write
+    # to a log file. The user must copy this NOW; we will not show it again.
+    click.echo("")
+    click.secho("=" * 72, fg="green")
+    click.secho(f"  Service account created: {user.full_name}", fg="green", bold=True)
+    click.secho(f"  ID:        {user.id}", fg="green")
+    click.secho(f"  Prefix:    {user.service_api_key_prefix}", fg="green")
+    click.secho("=" * 72, fg="green")
+    click.echo("")
+    click.secho("  API KEY (copy this NOW — it will NOT be shown again):", fg="yellow", bold=True)
+    click.echo("")
+    click.secho(f"    {plaintext_key}", fg="white", bg="red", bold=True)
+    click.echo("")
+    click.secho("=" * 72, fg="green")
+    click.secho(
+        "  Paste this into the Chrome extension popup (Backend URL + API Key field).",
+        fg="yellow",
+    )
+    click.secho("=" * 72, fg="green")
+    click.echo("")
 
 
 # === Custom Commands ===

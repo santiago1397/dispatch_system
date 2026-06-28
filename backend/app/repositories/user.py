@@ -23,6 +23,20 @@ async def get_by_email(db: AsyncSession, email: str) -> User | None:
     return result.scalar_one_or_none()
 
 
+async def get_by_service_api_key_prefix(db: AsyncSession, prefix: str) -> User | None:
+    """Look up a service account by the first 12 chars of its API key.
+
+    Used by the WhatsApp extension auth flow: the extension sends
+    ``X-Service-Api-Key: sk_live_<32 hex>``, the route strips the first
+    12 chars (``sk_live_xxxx``), looks up the user by prefix, then
+    bcrypt-verifies the full key against ``service_api_key_hash``.
+    """
+    result = await db.execute(
+        select(User).where(User.service_api_key_prefix == prefix, User.is_service_account.is_(True))
+    )
+    return result.scalar_one_or_none()
+
+
 async def get_multi(
     db: AsyncSession,
     *,

@@ -43,14 +43,9 @@ export function Header() {
               </Button>
             </>
           ) : (
-            <>
-              <Button variant="ghost" size="sm" asChild className="h-10">
-                <Link href={ROUTES.LOGIN}>Login</Link>
-              </Button>
-              <Button size="sm" asChild className="h-10">
-                <Link href={ROUTES.REGISTER}>Register</Link>
-              </Button>
-            </>
+            <Button variant="ghost" size="sm" asChild className="h-10">
+              <Link href={ROUTES.LOGIN}>Login</Link>
+            </Button>
           )}
         </div>
       </div>

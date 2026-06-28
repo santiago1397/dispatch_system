@@ -16,19 +16,38 @@ export class ApiError extends Error {
 }
 
 interface RequestOptions extends Omit<RequestInit, "body"> {
-  params?: Record<string, string>;
+  /**
+   * Query-string params. Accepts either a plain object (last write wins
+   * per key — fine for most filters) or a pre-built ``URLSearchParams``
+   * (use when the backend expects repeated keys, e.g. ``?kinds=a&kinds=b``).
+   */
+  params?: Record<string, string> | URLSearchParams;
   body?: unknown;
 }
 
+// Endpoints that must not trigger an auto-refresh on 401 — either they are
+// the refresh call itself (would recurse) or a 401 is the expected outcome
+// (login, where the caller decides what to do).
+const REFRESH_SKIP_ENDPOINTS = new Set(["/auth/refresh", "/auth/login"]);
+
 class ApiClient {
-  private async request<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
+  private refreshInFlight: Promise<boolean> | null = null;
+
+  private async request<T>(
+    endpoint: string,
+    options: RequestOptions = {},
+    isRetry = false
+  ): Promise<T> {
     const { params, body, ...fetchOptions } = options;
 
     let url = `/api${endpoint}`;
 
     if (params) {
-      const searchParams = new URLSearchParams(params);
-      url += `?${searchParams.toString()}`;
+      const qs =
+        params instanceof URLSearchParams
+          ? params.toString()
+          : new URLSearchParams(params).toString();
+      url += `?${qs}`;
     }
 
     const response = await fetch(url, {
@@ -39,6 +58,17 @@ class ApiClient {
       },
       body: body ? JSON.stringify(body) : undefined,
     });
+
+    if (
+      response.status === 401 &&
+      !isRetry &&
+      !REFRESH_SKIP_ENDPOINTS.has(endpoint)
+    ) {
+      const refreshed = await this.refreshTokens();
+      if (refreshed) {
+        return this.request<T>(endpoint, options, true);
+      }
+    }
 
     if (!response.ok) {
       let errorData;
@@ -61,6 +91,23 @@ class ApiClient {
     }
 
     return JSON.parse(text);
+  }
+
+  private async refreshTokens(): Promise<boolean> {
+    if (this.refreshInFlight) return this.refreshInFlight;
+
+    this.refreshInFlight = (async () => {
+      try {
+        const res = await fetch("/api/auth/refresh", { method: "POST" });
+        return res.ok;
+      } catch {
+        return false;
+      } finally {
+        this.refreshInFlight = null;
+      }
+    })();
+
+    return this.refreshInFlight;
   }
 
   get<T>(endpoint: string, options?: RequestOptions) {

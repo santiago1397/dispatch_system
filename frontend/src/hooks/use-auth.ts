@@ -4,7 +4,7 @@ import { useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthStore } from "@/stores";
 import { apiClient, ApiError } from "@/lib/api-client";
-import type { User, LoginRequest, RegisterRequest } from "@/types";
+import type { User, LoginRequest } from "@/types";
 import { ROUTES } from "@/lib/constants";
 
 export function useAuth() {
@@ -46,11 +46,6 @@ export function useAuth() {
     [router, setUser, setLoading]
   );
 
-  const register = useCallback(async (data: RegisterRequest) => {
-    const response = await apiClient.post<{ id: string; email: string }>("/auth/register", data);
-    return response;
-  }, []);
-
   const handleLogout = useCallback(async () => {
     try {
       await apiClient.post("/auth/logout");
@@ -83,7 +78,6 @@ export function useAuth() {
     isAuthenticated,
     isLoading,
     login,
-    register,
     logout: handleLogout,
     refreshToken,
   };

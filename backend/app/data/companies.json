@@ -1,0 +1,422 @@
+[
+  {
+    "name": "A1_LOCKSMITH",
+    "display_name": "A1 Locksmith",
+    "identification_patterns": [
+      {
+        "patterns": [
+          "A1\\sLocksmith",
+          "JOB\\sID:\\s[0-9A-Z]+",
+          "Source:\\sAgency"
+        ]
+      },
+      {
+        "patterns": [
+          "A1 Locksmith"
+        ]
+      },
+      {
+        "patterns": [
+          "(?:.*\\n){0,1}.*A1.*(?:\\n|)$"
+        ]
+      }
+    ],
+    "phone_numbers": []
+  },
+  {
+    "name": "ABC",
+    "display_name": "ABC Locksmith",
+    "identification_patterns": [
+      {
+        "patterns": [
+          "ABC Locksmith"
+        ]
+      },
+      {
+        "patterns": [
+          "Eric's Locksmith"
+        ]
+      }
+    ],
+    "phone_numbers": []
+  },
+  {
+    "name": "ALL_FIX",
+    "display_name": "All Fix",
+    "identification_patterns": [
+      {
+        "patterns": [
+          "JOB\\sID#\\s[A-Z0-9]{6}",
+          "8777711892",
+          "JobType:"
+        ]
+      }
+    ],
+    "phone_numbers": [
+      "8777711892"
+    ]
+  },
+  {
+    "name": "AMS",
+    "display_name": "Always 24/7",
+    "identification_patterns": [
+      {
+        "patterns": [
+          "(?:.*\\n){0,1}.*always 24/7.*(?:\\n|)$"
+        ]
+      },
+      {
+        "patterns": [
+          "Co:\\sAlways\\s24/7",
+          "PDL:",
+          "Occu:\\sLocksmith"
+        ]
+      },
+      {
+        "patterns": [
+          "Co: Always 24/7"
+        ]
+      },
+      {
+        "patterns": [
+          "(?:.*\\n){0,1}.*AMS.*(?:\\n|)$"
+        ]
+      },
+      {
+        "patterns": [
+          "Unknown Customer"
+        ]
+      }
+    ],
+    "phone_numbers": []
+  },
+  {
+    "name": "ASAP_LOCKSMITH",
+    "display_name": "A.S.A.P Services",
+    "identification_patterns": [
+      {
+        "patterns": [
+          "A\\.S\\.A\\.P\\sServices",
+          "Job\\sID:\\s#[A-Z0-9]+"
+        ]
+      },
+      {
+        "patterns": [
+          "ASAP Locksmith"
+        ]
+      },
+      {
+        "patterns": [
+          "A.S.A.P Services"
+        ]
+      }
+    ],
+    "phone_numbers": []
+  },
+  {
+    "name": "GARAGE_LEAD",
+    "display_name": "Garage Lead",
+    "identification_patterns": [
+      {
+        "patterns": [
+          "^[A-Z][a-z]+$",
+          "Ph:\\s*\\(\\d{10}\\)",
+          "addr:\\s*",
+          "Service",
+          "\\d{1,2}-\\d{1,2}[a-z]{2}"
+        ]
+      }
+    ],
+    "phone_numbers": []
+  },
+  {
+    "name": "JOSEPH_LOCKSMITH",
+    "display_name": "Joseph Locksmith",
+    "identification_patterns": [
+      {
+        "patterns": [
+          "Joseph locksmith"
+        ]
+      },
+      {
+        "patterns": [
+          "Joseph Locksmirh"
+        ]
+      },
+      {
+        "patterns": [
+          "^Joseph\\s*$"
+        ]
+      }
+    ],
+    "phone_numbers": []
+  },
+  {
+    "name": "ONE_AND_ONLY",
+    "display_name": "1 And Only",
+    "identification_patterns": [
+      {
+        "patterns": [
+          "1\\sAnd\\sOnly",
+          "Job\\sID:\\s*[0-9A-Z]+",
+          "Type:"
+        ]
+      },
+      {
+        "patterns": [
+          "(?:.*\\n){0,1}.*1nOnly.*(?:\\n|)$"
+        ]
+      },
+      {
+        "patterns": [
+          "1 and only"
+        ]
+      },
+      {
+        "patterns": [
+          "(?:.*\\n){0,1}.*One N Only.*(?:\\n|)$"
+        ]
+      }
+    ],
+    "phone_numbers": []
+  },
+  {
+    "name": "ON_CALL",
+    "display_name": "On Call Locksmith",
+    "identification_patterns": [
+      {
+        "patterns": [
+          "(?:.*\\n){0,1}.*On call locksmith.*(?:\\n|)$"
+        ]
+      },
+      {
+        "patterns": [
+          "(?:.*\\n){0,1}.*ON CALL LOCKSMITH.*(?:\\n|)$"
+        ]
+      },
+      {
+        "patterns": [
+          "(?:.*\\n){0,1}.*ON CALL.*(?:\\n|)$"
+        ]
+      }
+    ],
+    "phone_numbers": []
+  },
+  {
+    "name": "PROFESSIONAL_LOCKSMITH",
+    "display_name": "Professional Locksmith",
+    "identification_patterns": [
+      {
+        "patterns": [
+          "J#\\d{10}",
+          "\\|\\s\\d{2}/\\d{2}/\\d{4}"
+        ]
+      },
+      {
+        "patterns": [
+          "Professional Locksmith"
+        ]
+      },
+      {
+        "patterns": [
+          "(?:.*\\n){0,1}.*PROFESSIONAL.*(?:\\n|)$"
+        ]
+      },
+      {
+        "patterns": [
+          "E#\\d{10}",
+          "\\|\\s\\d{2}/\\d{2}/\\d{4}"
+        ]
+      },
+      {
+        "patterns": [
+          "J#\\d{10}"
+        ]
+      }
+    ],
+    "phone_numbers": []
+  },
+  {
+    "name": "QUICK_KEY_PROFESSIONAL",
+    "display_name": "Quick key/Professional",
+    "identification_patterns": [
+      {
+        "patterns": [
+          "s1j\\.co/j/[A-Z0-9]+"
+        ]
+      },
+      {
+        "patterns": [
+          "New\\s+(?:job|lead)\\s+#\\s*\\d+",
+          "\\(\\d{10}\\)"
+        ]
+      }
+    ],
+    "phone_numbers": []
+  },
+  {
+    "name": "SADAN",
+    "display_name": "Sadan",
+    "identification_patterns": [
+      {
+        "patterns": [
+          "Job:\\s[A-Z0-9]{5}",
+          "Phone1:",
+          "Address:"
+        ]
+      },
+      {
+        "patterns": [
+          "Crystal Locksmith"
+        ]
+      },
+      {
+        "patterns": [
+          "Source: Lucky"
+        ]
+      },
+      {
+        "patterns": [
+          "Source: Locksmith Around The Clock"
+        ]
+      },
+      {
+        "patterns": [
+          "Source: Bates"
+        ]
+      },
+      {
+        "patterns": [
+          "Source: Locksmith And Security Group"
+        ]
+      },
+      {
+        "patterns": [
+          "Mega Locksmith"
+        ]
+      },
+      {
+        "patterns": [
+          "\\[Chilocksmith\\]"
+        ]
+      }
+    ],
+    "phone_numbers": []
+  },
+  {
+    "name": "SHAHAF",
+    "display_name": "Shahaf Locksmith",
+    "identification_patterns": [
+      {
+        "patterns": [
+          "(?m)^New\\s+Lead\\s+#[A-Z0-9]{6}\\s*$",
+          "(?m)^Company:\\s+American\\s+Locksmith\\s*$",
+          "(?m)^Contact:\\s+",
+          "(?m)^Phone:\\s+\\+16506754074(?:\\s+#\\d+)?",
+          "(?m)^Address:\\s+",
+          "(?m)^Job\\s+Type:\\s+",
+          "(?m)^Notes:\\s*",
+          "(?m)^Start:\\s+\\d{2}/\\d{2}/\\d{4}\\s+\\d{1,2}:\\d{2}\\s*[AP]M\\s+-\\s+End:\\s+\\d{2}/\\d{2}/\\d{4}\\s+\\d{1,2}:\\d{2}\\s*[AP]M\\s*$"
+        ]
+      },
+      {
+        "patterns": [
+          "New\\sjob\\s#[A-Z0-9]{6}",
+          "Locksmith\\s24/7",
+          "\\(\\d{10}\\s#\\d+\\)"
+        ]
+      },
+      {
+        "patterns": [
+          "New job #",
+          "Locksmith 24/7",
+          "Please send OK to confirm"
+        ]
+      },
+      {
+        "patterns": [
+          "(?m)^Phone:\\s+\\+16506754074\\s+#\\d+\\s*$"
+        ]
+      },
+      {
+        "patterns": [
+          "(?m)^Company:\\s+American\\s+Locksmith\\s*$",
+          "(?m)^New\\s+Lead\\s+#[A-Z0-9]{6}\\s*$"
+        ]
+      }
+    ],
+    "phone_numbers": [
+      "6054507491",
+      "6506754074"
+    ]
+  },
+  {
+    "name": "SLK",
+    "display_name": "SLK",
+    "identification_patterns": [
+      {
+        "patterns": [
+          "New\\sjob\\s#\\s?[A-Z0-9]{6}",
+          "\\(\\d{10}\\s#\\d+\\)",
+          "Notes:"
+        ]
+      },
+      {
+        "patterns": [
+          "New\\sjob\\s#\\s?[A-Z0-9]{6}",
+          "2037699944"
+        ]
+      },
+      {
+        "patterns": [
+          "(?:.*\\n){0,1}.*SLK.*(?:\\n|)$"
+        ]
+      },
+      {
+        "patterns": [
+          "New\\sjob\\s#\\s?[A-Z0-9]{6}",
+          "Service Confirm:",
+          "Notes: #"
+        ]
+      }
+    ],
+    "phone_numbers": [
+      "2037699944"
+    ]
+  },
+  {
+    "name": "USAFE",
+    "display_name": "Usafe Locksmith",
+    "identification_patterns": [
+      {
+        "patterns": [
+          "getjobox\\.com",
+          "PDL:\\s[A-Z]{5}",
+          "Svc\\s\\+\\slabor"
+        ]
+      },
+      {
+        "patterns": [
+          "Usafe\\sLocksmith",
+          "PDL:"
+        ]
+      },
+      {
+        "patterns": [
+          "(?:.*\\n){0,1}.*USAFE.*(?:\\n|)$"
+        ]
+      },
+      {
+        "patterns": [
+          "(?:.*\\n){0,1}.*Usafe.*(?:\\n|)$"
+        ]
+      },
+      {
+        "patterns": [
+          "Ref: Us Garage Door"
+        ]
+      }
+    ],
+    "phone_numbers": []
+  }
+]

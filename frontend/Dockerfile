@@ -17,6 +17,11 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
+# NEXT_PUBLIC_* vars are baked into the JS bundle at build time, so they
+# must be present before `bun run build`. Set via `build.args` in compose.
+ARG NEXT_PUBLIC_WS_URL
+ENV NEXT_PUBLIC_WS_URL=$NEXT_PUBLIC_WS_URL
+
 # Build the application
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN bun run build

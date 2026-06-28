@@ -17,6 +17,40 @@ from app.schemas.conversation import (
     ToolCallRead,
 )
 
+from app.schemas.whatsapp import (
+    ServiceRefreshRequest,
+    ServiceTokenRequest,
+    ServiceTokenResponse,
+    WhatsappMessageBatchError,
+    WhatsappMessageBatchIngest,
+    WhatsappMessageBatchResult,
+    WhatsappMessageCreate,
+    WhatsappMessageList,
+    WhatsappMessageRead,
+    WhatsappTrackedChatCreate,
+    WhatsappTrackedChatDiscoverItem,
+    WhatsappTrackedChatList,
+    WhatsappTrackedChatRead,
+    WhatsappTrackedChatUpdate,
+)
+
+from app.schemas.technician import (
+    TechnicianCreate,
+    TechnicianList,
+    TechnicianRead,
+    TechnicianUpdate,
+)
+
+from app.schemas.job_lifecycle_event import (
+    JobLifecycleEventList,
+    JobLifecycleEventRead,
+    LifecycleTransitionIn,
+)
+
+from app.schemas.alert import AlertList, AlertRead
+
+from app.schemas.daily_stats import DailyStatsList, DailyStatsSnapshotRead
+
 __all__ = [
     "UserCreate",
     "UserRead",
@@ -35,4 +69,29 @@ __all__ = [
     "MessageCreate",
     "MessageRead",
     "ToolCallRead",
+    "ServiceRefreshRequest",
+    "ServiceTokenRequest",
+    "ServiceTokenResponse",
+    "WhatsappMessageBatchError",
+    "WhatsappMessageBatchIngest",
+    "WhatsappMessageBatchResult",
+    "WhatsappMessageCreate",
+    "WhatsappMessageList",
+    "WhatsappMessageRead",
+    "WhatsappTrackedChatCreate",
+    "WhatsappTrackedChatDiscoverItem",
+    "WhatsappTrackedChatList",
+    "WhatsappTrackedChatRead",
+    "WhatsappTrackedChatUpdate",
+    "TechnicianCreate",
+    "TechnicianList",
+    "TechnicianRead",
+    "TechnicianUpdate",
+    "JobLifecycleEventList",
+    "JobLifecycleEventRead",
+    "LifecycleTransitionIn",
+    "AlertList",
+    "AlertRead",
+    "DailyStatsList",
+    "DailyStatsSnapshotRead",
 ]

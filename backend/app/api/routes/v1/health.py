@@ -4,8 +4,10 @@ Provides Kubernetes-compatible health check endpoints:
 - /health - Simple liveness check
 - /health/live - Detailed liveness probe
 - /health/ready - Readiness probe with dependency checks
+- /health/whoami - Return this worker's identity (pid, worker_id, parent_pid,
+  started_at) so you can verify which process actually served a request —
+  especially valuable when diagnosing orphaned-worker / stale-code issues.
 """
-# ruff: noqa: I001 - Imports structured for Jinja2 template conditionals
 
 from datetime import UTC, datetime
 from typing import Any
@@ -14,8 +16,9 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
-from app.core.config import settings
 from app.api.deps import DBSession
+from app.core.config import settings
+from app.core.observability import get_process_identity
 
 router = APIRouter()
 
@@ -134,3 +137,23 @@ async def readiness_check(
     return await readiness_probe(
         db=db,
     )
+
+
+@router.get("/health/whoami")
+async def whoami() -> dict[str, Any]:
+    """Return this worker's identity.
+
+    Cross-reference the returned ``pid`` with ``netstat -ano | grep :8888`` to
+    verify which process is actually answering your requests — useful when an
+    orphaned worker from a previous session is squatting on the port and
+    serving stale code.
+    """
+    identity = get_process_identity()
+    return {
+        "service": settings.PROJECT_NAME,
+        "environment": settings.ENVIRONMENT,
+        "pid": identity["pid"],
+        "parent_pid": identity["parent_pid"],
+        "worker_id": identity["worker_id"],
+        "started_at": datetime.fromtimestamp(identity["started_at"], tz=UTC).isoformat(),
+    }

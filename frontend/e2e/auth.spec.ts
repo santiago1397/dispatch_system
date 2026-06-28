@@ -35,49 +35,6 @@ test.describe("Authentication", () => {
         timeout: 5000,
       });
     });
-
-    test("should have link to registration", async ({ page }) => {
-      await page.goto("/login");
-
-      // Should have link to register page
-      const registerLink = page.getByRole("link", { name: /sign up|register|create account/i });
-      await expect(registerLink).toBeVisible();
-    });
-  });
-
-  test.describe("Registration Page", () => {
-    test("should display registration form", async ({ page }) => {
-      await page.goto("/register");
-
-      // Check for registration form elements
-      await expect(page.getByRole("heading", { name: /sign up|register|create/i })).toBeVisible();
-      await expect(page.getByLabel(/email/i)).toBeVisible();
-      await expect(page.getByLabel(/password/i).first()).toBeVisible();
-      await expect(page.getByRole("button", { name: /sign up|register|create/i })).toBeVisible();
-    });
-
-    test("should validate password requirements", async ({ page }) => {
-      await page.goto("/register");
-
-      // Fill in weak password
-      await page.getByLabel(/email/i).fill("newuser@example.com");
-      await page
-        .getByLabel(/password/i)
-        .first()
-        .fill("weak");
-
-      // Should show password requirements error
-      await page.getByRole("button", { name: /sign up|register|create/i }).click();
-      await expect(page.getByText(/password|characters|strong/i)).toBeVisible();
-    });
-
-    test("should have link to login", async ({ page }) => {
-      await page.goto("/register");
-
-      // Should have link to login page
-      const loginLink = page.getByRole("link", { name: /sign in|log in|already have/i });
-      await expect(loginLink).toBeVisible();
-    });
   });
 
   test.describe("Authenticated User", () => {

@@ -1,0 +1,1 @@
+export { AlertsSidebarBadge } from "./alerts-sidebar-badge";

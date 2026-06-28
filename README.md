@@ -25,6 +25,28 @@
   <a href="#-documentation">Documentation</a>
 </p>
 
+---
+
+> **📌 Local development notes (added 2026-06-05 after the project's first end-to-end run)**
+>
+> This README is the upstream `fastapi-fullstack` template content and
+> describes template capabilities (LangChain, Logfire, Sentry, etc.) that
+> may or may not be configured in this project. For the **actual** state
+> of this project, trust these instead:
+>
+> - **`CLAUDE.md`** — project overview, commands, env vars, first-run gotchas
+> - **`docs/index.md`** — full documentation index
+> - **`docs/guides/2026-06-04_whatsapp_extension.md`** — end-to-end setup including the Chrome extension and service-account auth
+>
+> Concrete deviations from the template's "Quick Start" below:
+> - **No `.env.example` is checked in.** Create `backend/.env` directly. See `CLAUDE.md` for the keys.
+> - **No Alembic migrations are checked in** (`backend/alembic/versions/` is empty). The schema was bootstrapped with `Base.metadata.create_all` on first run. `alembic upgrade head` is a no-op until you generate a real migration.
+> - **Two template bugs were fixed on first run** (the `class Foo(str, StrEnum)` MRO issue in `company.py` and `dispatch_job.py`). They're in the code now, but if you `git diff` and see them reappear, drop the redundant `str,` base.
+
+---
+
+
+
 ## Related Projects
 
 > **Building advanced AI agents?** Check out [pydantic-deep](https://github.com/vstorm-co/pydantic-deepagents) - a deep agent framework built on pydantic-ai with planning, filesystem, and subagent capabilities.

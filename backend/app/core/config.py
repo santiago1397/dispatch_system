@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     # === Project ===
     PROJECT_NAME: str = "agents_bots"
     API_V1_STR: str = "/api/v1"
+    PORT: int = 8888
     DEBUG: bool = False
     ENVIRONMENT: Literal["development", "local", "staging", "production"] = "local"
 
@@ -95,9 +96,14 @@ class Settings(BaseSettings):
     PROMETHEUS_METRICS_PATH: str = "/metrics"
     PROMETHEUS_INCLUDE_IN_SCHEMA: bool = False
 
-    # === AI Agent (langchain, openai) ===
+    # === AI Agent (langchain, openai / openai-compatible) ===
+    # The ChatOpenAI client is OpenAI-API-compatible, so any provider
+    # that speaks the same protocol works (OpenAI, OpenRouter,
+    # Together, Groq, local llama.cpp, etc.) — just point AI_BASE_URL
+    # at it. The OPENAI_API_KEY var holds whichever provider's key.
     OPENAI_API_KEY: str = ""
     AI_MODEL: str = "gpt-4o-mini"
+    AI_BASE_URL: str = "https://api.openai.com/v1"
     AI_TEMPERATURE: float = 0.7
     AI_FRAMEWORK: str = "langchain"
     LLM_PROVIDER: str = "openai"
@@ -107,6 +113,35 @@ class Settings(BaseSettings):
     LANGCHAIN_API_KEY: str | None = None
     LANGCHAIN_PROJECT: str = "agents_bots"
     LANGCHAIN_ENDPOINT: str = "https://api.smith.langchain.com"
+
+    # === OpenPhone (Quo API) ===
+    OPENPHONE_API_KEY: str = ""
+    OPENPHONE_WEBHOOK_SECRET: str = ""  # key returned when creating a webhook
+    OPENPHONE_BASE_URL: str = "https://api.openphone.com/v1"
+
+    # === Browser Automation (Playwright) ===
+    BROWSER_ENABLED: bool = False
+    BROWSER_HEADLESS: bool = True
+    BROWSER_CHANNEL: str = "chromium"  # "chromium", "chrome", "msedge"
+    BROWSER_USER_DATA_DIR: str = "browser_data"  # relative to project root
+
+    # === Lifecycle Pipeline (Alerts + Daily Stats) ===
+    # APScheduler is started inside the FastAPI lifespan when
+    # ``SCHEDULER_ENABLED=True`` AND we're not in the pytest test
+    # environment (``ENVIRONMENT != "test"``). Two jobs run:
+    # - ``alert_engine.scan`` every ALERT_ENGINE_INTERVAL_MINUTES (default 5)
+    # - ``daily_stats.snapshot`` at STATS_DAILY_HOUR:STATS_DAILY_MINUTE local
+    # Thresholds are operator-tunable; alerts only fire if a Job has been
+    # stuck in the offending status for longer than the configured
+    # minutes.
+    SCHEDULER_ENABLED: bool = True
+    ALERT_ENGINE_INTERVAL_MINUTES: int = 5
+    ALERTS_STUCK_DISPATCHED_MINUTES: int = 240  # 4 hours
+    ALERTS_STUCK_IN_PROGRESS_MINUTES: int = 480  # 8 hours
+    ALERTS_APPT_PASSED_GRACE_MINUTES: int = 60  # 1 hour after the appt
+    ALERTS_CLOSING_GRACE_MINUTES: int = 1440  # 24 hours with no close
+    STATS_DAILY_HOUR: int = 23
+    STATS_DAILY_MINUTE: int = 55
 
     # === CORS ===
     CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:8080"]

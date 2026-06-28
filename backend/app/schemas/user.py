@@ -1,5 +1,6 @@
 """User schemas."""
 
+from datetime import datetime
 from enum import Enum
 from uuid import UUID
 
@@ -43,11 +44,19 @@ class UserUpdate(BaseSchema):
 
 
 class UserRead(UserBase, TimestampSchema):
-    """Schema for reading a user."""
+    """Schema for reading a user.
+
+    Service-account fields are exposed here but should be stripped from
+    non-admin responses at the route layer (see ``app/api/routes/v1/users.py``).
+    """
 
     id: UUID
     is_superuser: bool = False
     role: UserRole = UserRole.USER
+    is_service_account: bool = False
+    service_account_name: str | None = None
+    service_api_key_prefix: str | None = None
+    service_account_last_used_at: datetime | None = None
 
 
 class UserInDB(UserRead):

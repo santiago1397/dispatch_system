@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import { useAuth } from "@/hooks";
 import {
   Button,
@@ -11,10 +10,9 @@ import {
   CardHeader,
   CardTitle,
   CardContent,
-  CardFooter,
+  Spinner,
 } from "@/components/ui";
 import { ApiError } from "@/lib/api-client";
-import { ROUTES } from "@/lib/constants";
 
 export function LoginForm() {
   const { login } = useAuth();
@@ -72,18 +70,22 @@ export function LoginForm() {
           </div>
           {error && <p className="text-destructive text-sm">{error}</p>}
           <Button type="submit" className="w-full" disabled={isLoading}>
-            {isLoading ? "Logging in..." : "Login"}
+            {isLoading ? (
+              <>
+                <Spinner size="sm" />
+                <span>Logging in...</span>
+              </>
+            ) : (
+              "Login"
+            )}
           </Button>
+          {isLoading && (
+            <p className="text-muted-foreground flex items-center justify-center gap-2 text-sm">
+              <span>Signing you in, please wait</span>
+            </p>
+          )}
         </form>
       </CardContent>
-      <CardFooter className="justify-center">
-        <p className="text-muted-foreground text-sm">
-          Don&apos;t have an account?{" "}
-          <Link href={ROUTES.REGISTER} className="text-primary hover:underline">
-            Register
-          </Link>
-        </p>
-      </CardFooter>
     </Card>
   );
 }

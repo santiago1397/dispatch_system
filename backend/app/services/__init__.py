@@ -13,4 +13,21 @@ from app.services.item import ItemService
 
 from app.services.conversation import ConversationService
 
-__all__ = ["UserService", "SessionService", "ItemService", "ConversationService"]
+from app.services.openphone import OpenPhoneService
+
+from app.services.dispatch_job import DispatchJobService
+
+from app.services.whatsapp import WhatsappService
+
+from app.services.company import CompanyService
+
+__all__ = [
+    "UserService",
+    "SessionService",
+    "ItemService",
+    "ConversationService",
+    "OpenPhoneService",
+    "DispatchJobService",
+    "WhatsappService",
+    "CompanyService",
+]

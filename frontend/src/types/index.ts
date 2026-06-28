@@ -4,5 +4,11 @@
 
 export * from "./api";
 export * from "./auth";
-export * from "./chat";
-export * from "./conversation";
+export * from "./whatsapp";
+export * from "./jobs";
+export * from "./lifecycle";
+export * from "./openphone";
+export * from "./technician";
+export * from "./alert";
+export * from "./stats";
+export * from "./settings";

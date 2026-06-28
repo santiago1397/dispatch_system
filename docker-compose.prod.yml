@@ -42,11 +42,16 @@ services:
     environment:
       - DEBUG=false
       - ENVIRONMENT=production
-      - POSTGRES_HOST=host.docker.internal
     extra_hosts:
       - "host.docker.internal:host-gateway"
     expose:
       - "8888"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8888/api/v1/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     networks:
       - dispatch-net
       - traefik-public

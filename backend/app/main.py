@@ -1,5 +1,6 @@
 """FastAPI application entry point."""
 
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -28,7 +29,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # so a prod deploy doesn't suddenly inherit INFO-level volume from
     # third-party libs (asyncpg, uvicorn, etc.).
     if settings.ENVIRONMENT != "production":
-        import logging
         from logging.handlers import RotatingFileHandler
         from pathlib import Path
 
@@ -120,8 +120,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         await browser_manager.start()
     except Exception:
-        import logging
-
         logging.getLogger(__name__).warning(
             "Browser manager failed to start — browser automation disabled", exc_info=True
         )

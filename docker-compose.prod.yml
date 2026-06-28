@@ -100,7 +100,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=traefik-public"
-      - "traefik.http.routers.dispatch-web.rule=Host(`santiagoproperties.uk`, `www.santiagoproperties.uk`)"
+      - "traefik.http.routers.dispatch-web.rule=Host(`santiagoproperties.uk`) || Host(`www.santiagoproperties.uk`)"
       - "traefik.http.routers.dispatch-web.entrypoints=websecure"
       - "traefik.http.routers.dispatch-web.tls=true"
       - "traefik.http.routers.dispatch-web.tls.certresolver=letsencrypt"

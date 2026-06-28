@@ -65,6 +65,10 @@ async def receive_openphone_webhook(
         user_agent,
         content_type,
     )
+    # TEMP DIAGNOSTIC: dump every header so we can see what OpenPhone actually sends.
+    # Remove after identifying the real signature header name + format.
+    import sys
+    print(f"[DIAG] HEADERS: {dict(request.headers)}", file=sys.stderr, flush=True)
 
     body = await request.body()
     signature = request.headers.get(SIGNATURE_HEADER)

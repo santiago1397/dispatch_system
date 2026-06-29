@@ -1,13 +1,21 @@
 """Webhook signature verification for Quo (OpenPhone) webhooks."""
 
+import base64
 import hashlib
 import hmac
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
-# Header name Quo uses for webhook signatures (common pattern)
-SIGNATURE_HEADER = "x-openphone-signature"
+# Header name Quo (OpenPhone) uses for webhook signatures.
+SIGNATURE_HEADER = "openphone-signature"
+
+# Maximum clock skew (in milliseconds) tolerated between us and Quo when checking
+# the signature timestamp. Webhooks with a timestamp older or newer than this
+# window are rejected as replays. Quo already enforces this server-side; this is
+# defense in depth.
+SIGNATURE_TOLERANCE_MS = 5 * 60 * 1000
 
 
 def verify_openphone_signature(
@@ -15,16 +23,19 @@ def verify_openphone_signature(
     signature: str | None,
     secret: str,
 ) -> bool:
-    """Verify the HMAC-SHA256 signature of an incoming webhook payload.
+    """Verify the HMAC-SHA256 signature of an incoming Quo (OpenPhone) webhook payload.
+
+    Quo's signature header format: "hmac;1;<unix-ms-timestamp>;<base64-hmac-sha256>".
+    The signed string is "{timestamp}.{raw_body}" using the webhook secret as the key.
 
     Args:
         payload: Raw request body bytes.
-        signature: Value of the X-OpenPhone-Signature header.
+        signature: Value of the openphone-signature header.
         secret: The webhook key returned by Quo when creating the webhook.
 
     Returns:
-        True if signature is valid.
-        False if the signature is missing (when secret is configured) or doesn't match.
+        True if the signature is valid and within the replay window.
+        False if the signature is missing, malformed, expired, or doesn't match.
         In local/development environments, skips verification if no secret is configured.
     """
     if not secret:
@@ -45,13 +56,43 @@ def verify_openphone_signature(
         logger.warning("Webhook rejected: no signature header in request")
         return False
 
-    expected = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+    # Parse "hmac;1;<ts>;<b64-sig>"
+    parts = signature.split(";")
+    if len(parts) != 4 or parts[0] != "hmac" or parts[1] != "1":
+        logger.warning(
+            "Webhook rejected: malformed signature header (got %d parts)", len(parts)
+        )
+        return False
 
-    if not hmac.compare_digest(expected, signature):
+    try:
+        timestamp_ms = int(parts[2])
+    except ValueError:
+        logger.warning("Webhook rejected: non-integer timestamp in signature header")
+        return False
+
+    received_sig_b64 = parts[3]
+
+    # Replay protection
+    now_ms = int(time.time() * 1000)
+    skew_ms = abs(now_ms - timestamp_ms)
+    if skew_ms > SIGNATURE_TOLERANCE_MS:
+        logger.warning(
+            "Webhook rejected: signature timestamp outside tolerance window (skew_ms=%d)",
+            skew_ms,
+        )
+        return False
+
+    # Recompute expected signature: HMAC-SHA256(secret, "{ts}.{body}") → base64
+    signing_string = f"{timestamp_ms}.".encode("utf-8") + payload
+    expected_sig_b64 = base64.b64encode(
+        hmac.new(secret.encode("utf-8"), signing_string, hashlib.sha256).digest()
+    ).decode("ascii")
+
+    if not hmac.compare_digest(expected_sig_b64, received_sig_b64):
         logger.warning(
             "Webhook signature verification failed: expected=%s... received=%s... payload_bytes=%d",
-            expected[:12],
-            signature[:12],
+            expected_sig_b64[:12],
+            received_sig_b64[:12],
             len(payload),
         )
         return False

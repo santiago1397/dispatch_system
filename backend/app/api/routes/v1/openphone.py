@@ -13,7 +13,6 @@ from app.core.webhook import SIGNATURE_HEADER, verify_openphone_signature
 from app.schemas.openphone import (
     IncomingMessageList,
     IncomingMessageRead,
-    SendMessageRequest,
 )
 from app.services.openphone import OpenPhoneService
 
@@ -207,21 +206,6 @@ async def get_message(
 ):
     """Get a message by ID from OpenPhone API."""
     return await service.get_message(message_id)
-
-
-@router.post("/messages", status_code=status.HTTP_202_ACCEPTED)
-async def send_message(
-    request_body: SendMessageRequest,
-    service: OpenPhoneSvc,
-    _user: CurrentUser,
-):
-    """Send a text message via OpenPhone API."""
-    return await service.send_message(
-        content=request_body.content,
-        from_number=request_body.from_number,
-        to=request_body.to,
-        user_id=request_body.user_id,
-    )
 
 
 @router.get("/conversations")

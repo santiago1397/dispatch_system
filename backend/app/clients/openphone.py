@@ -98,23 +98,10 @@ class OpenPhoneClient:
         """Get a message by ID."""
         return await self._request("GET", f"/messages/{message_id}")
 
-    async def send_message(
-        self,
-        *,
-        content: str,
-        from_number: str,
-        to: list[str],
-        user_id: str | None = None,
-    ) -> dict[str, Any]:
-        """Send a text message."""
-        payload: dict[str, Any] = {
-            "content": content,
-            "from": from_number,
-            "to": to,
-        }
-        if user_id:
-            payload["userId"] = user_id
-        return await self._request("POST", "/messages", json=payload)
+    # NOTE: There is intentionally no ``send_message`` method on this client.
+    # ``POST /v1/messages`` on Quo is metered at $0.01/segment — the
+    # Dispatch Chicago system never places outbound customer messages,
+    # operators type replies natively in the OpenPhone mobile app.
 
     # === Conversations ===
 

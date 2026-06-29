@@ -1,0 +1,72 @@
+# Local LLM runtime for the backfill extraction script.
+#
+# Hosts Ollama (https://ollama.com) — a self-hosted model server with an
+# OpenAI-compatible REST API at http://localhost:11434/v1/chat/completions.
+# The future script that reads backfill_output/manifest.csv + raw JSON will
+# POST extraction prompts here.
+#
+# Quick start (Windows / macOS / Linux):
+#   cd dispatch_bot/backend/local_llm
+#   docker compose up -d                     # start the server
+#   docker compose exec ollama ollama pull llama3.2:3b   # download the model (~2 GB)
+#   curl http://localhost:11434/api/tags     # verify model is loaded
+#
+# Other small models that work well for structured extraction (swap the pull command):
+#   - qwen2.5:3b          (~1.9 GB, strong instruction-following)
+#   - phi3:mini           (~2.3 GB, Microsoft)
+#   - gemma2:2b           (~1.6 GB, Google, smallest)
+#   - mistral:7b          (~4.1 GB, larger but stronger)
+#   - llama3.1:8b         (~4.7 GB, strongest "small" Llama)
+#
+# Windows note: Docker Desktop must use the WSL2 backend (the default since
+# 2022). If `docker compose up` hangs, check Settings -> Resources -> WSL
+# integration in Docker Desktop.
+#
+# Models are stored in the named volume `dispatch_ollama_data` and survive
+# container restarts. `docker compose down -v` would wipe them.
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: dispatch_local_llm
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    # GPU passthrough — falls back to CPU if NVIDIA runtime is unavailable.
+    # Expects Docker Desktop's WSL2 backend with NVIDIA Container Toolkit
+    # installed (standard on Windows + NVIDIA GPU). Without this, llama3.2:3b
+    # inference takes ~40s/request on CPU; with it, ~1-3s/request.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # Throughput tuning for the RTX 3070 / 3070 Ti (8 GB VRAM).
+    # - NUM_PARALLEL=4 fits comfortably for ~2 GB models (llama3.2:3b,
+    #   qwen2.5:3b). With 4 slots × 2 GB + ~400 MB KV cache = ~8.4 GB
+    #   — tight but OK on 8 GB cards.
+    # - For 4B+ models (gemma3:4b at 3.3 GB), drop to NUM_PARALLEL=2
+    #   to avoid OOM.
+    # - KV_CACHE_TYPE=q8_0 halves the per-request KV-cache footprint.
+    # - CONTEXT_LENGTH=4096 caps the context window — our prompts are at
+    #   most ~3500 tokens, so anything bigger wastes KV cache.
+    environment:
+      - OLLAMA_NUM_PARALLEL=4
+      - OLLAMA_KV_CACHE_TYPE=q8_0
+      - OLLAMA_CONTEXT_LENGTH=4096
+      - OLLAMA_FLASH_ATTENTION=1
+    healthcheck:
+      # Ollama image ships with curl; this hits the model-list endpoint.
+      test: ["CMD", "curl", "-fsS", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  ollama_data:
+    name: dispatch_ollama_data

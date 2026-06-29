@@ -104,4 +104,6 @@ logs/
 Thumbs.db
 
 # Project specific
-browser_data/
+
+# Backfill extractor outputs — JSON, CSV, run.log
+backfill_output/

@@ -114,16 +114,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             collision["port"],
         )
 
-    # Start persistent browser
-    try:
-        from app.browser.manager import browser_manager
-
-        await browser_manager.start()
-    except Exception:
-        logging.getLogger(__name__).warning(
-            "Browser manager failed to start — browser automation disabled", exc_info=True
-        )
-
     # === Lifecycle pipeline scheduler (alerts + daily stats) ===
     # APScheduler is started in-process. Gated on ENVIRONMENT != "test"
     # so the pytest suite doesn't fire background scans. In production,
@@ -211,14 +201,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from app.db.session import close_db
 
     await close_db()
-
-    # Stop persistent browser
-    try:
-        from app.browser.manager import browser_manager
-
-        await browser_manager.stop()
-    except Exception:
-        pass
 
 
 # Environments where API docs should be visible

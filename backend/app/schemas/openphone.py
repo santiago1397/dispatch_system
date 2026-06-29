@@ -170,25 +170,6 @@ class MessageWebhookPayload(BaseSchema):
 
 
 # =============================================================================
-# Send Message Request
-# =============================================================================
-
-
-class SendMessageRequest(BaseSchema):
-    """Request body for sending a text message via Quo API."""
-
-    content: str = Field(
-        ..., min_length=1, max_length=1600, description="Text content of the message"
-    )
-    from_number: str = Field(..., alias="from", description="Your OpenPhone number in E.164 format")
-    to: list[str] = Field(..., min_length=1, description="Recipient phone numbers in E.164 format")
-    user_id: str | None = Field(None, description="OpenPhone user ID sending the message")
-    set_inbox_status: Literal["done"] | None = Field(None, alias="setInboxStatus")
-
-    model_config = ConfigDict(populate_by_name=True)
-
-
-# =============================================================================
 # Incoming Message Schemas (our DB records)
 # =============================================================================
 

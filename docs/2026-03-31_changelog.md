@@ -53,9 +53,12 @@ If a company is identified, a second AI call extracts **9 structured fields**: a
 
 ### 5. Browser Automation
 
-- **Browser Manager** (`app/browser/manager.py`): Singleton managing a persistent Playwright Chromium context that survives app restarts (cookies, localStorage, cache preserved to disk).
-- Configurable via `BROWSER_ENABLED`, `BROWSER_HEADLESS`, `BROWSER_CHANNEL`, `BROWSER_USER_DATA_DIR`.
-- Started/stopped during the FastAPI app lifespan.
+> **Removed 2026-06-28.** Playwright and `app/browser/manager.py` were
+> plumbed in but never used. With them gone the backend has no browser
+> automation surface — the WhatsApp extension is the only ingestion path
+> for WhatsApp Web data, and the trust boundary stays in the user's
+> browser. See the "Why a Chrome extension (and nothing server-side)"
+> section in `2026-06-04_whatsapp_extension.md`.
 
 ---
 

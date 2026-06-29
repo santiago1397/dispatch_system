@@ -6,12 +6,9 @@ Dependency injection factories for services, repositories, and authentication.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated
 
 from fastapi import Depends
-
-if TYPE_CHECKING:
-    from playwright.async_api import Page
 from fastapi.security import OAuth2PasswordBearer
 
 from app.core.config import settings
@@ -88,22 +85,6 @@ def get_whatsapp_service(db: DBSession) -> WhatsappService:
 
 
 WhatsappSvc = Annotated[WhatsappService, Depends(get_whatsapp_service)]
-
-# === Browser Dependencies ===
-
-from app.browser.manager import browser_manager
-
-
-async def get_browser_page():
-    """Get the active browser page for automation tasks.
-
-    Raises:
-        RuntimeError: If browser is not running.
-    """
-    return browser_manager.page
-
-
-BrowserPage = Annotated["Page", Depends(get_browser_page)]
 
 # === Authentication Dependencies ===
 

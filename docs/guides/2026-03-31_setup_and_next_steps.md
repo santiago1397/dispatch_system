@@ -54,10 +54,6 @@ OPENPHONE_BASE_URL=https://api.openphone.com/v1
 
 # OpenAI (for AI classification)
 OPENAI_API_KEY=sk-...
-
-# Browser automation (optional, set to false if not needed)
-BROWSER_ENABLED=false
-BROWSER_HEADLESS=true
 ```
 
 ### 2. Install Dependencies
@@ -65,12 +61,6 @@ BROWSER_HEADLESS=true
 ```bash
 cd backend
 uv sync
-```
-
-If you plan to use Playwright browser automation:
-
-```bash
-uv run playwright install chromium
 ```
 
 ### 3. Database Migration
@@ -158,7 +148,6 @@ Send a test message to your OpenPhone number and verify:
 | POST | `/api/v1/openphone/users` | Create/get user |
 | GET | `/api/v1/openphone/users/{id}` | Get user |
 | GET | `/api/v1/openphone/messages` | List messages |
-| POST | `/api/v1/openphone/messages` | Send a message |
 | GET | `/api/v1/openphone/messages/{id}` | Get message |
 | GET | `/api/v1/openphone/conversations` | List conversations |
 | GET | `/api/v1/openphone/webhooks` | List webhooks |
@@ -208,12 +197,11 @@ Send a test message to your OpenPhone number and verify:
 - [ ] **Real-time updates** — use WebSocket or SSE to push new classified jobs to the frontend as they arrive
 - [ ] **Metrics** — job volume per company, classification accuracy, average extraction confidence
 - [ ] **Company CRUD** — add API endpoints to create/update/delete companies (currently only the seed command can do this)
-- [ ] **Browser automation** — the Playwright infrastructure is in place but not yet used. Integrate it to automate actions on dispatch platforms
 - [ ] **Notification system** — send alerts (via OpenPhone or another channel) when high-priority jobs are detected
 
 ### Priority 4 — Production Readiness
 
-- [ ] **Docker setup** — update `docker-compose.yml` to include the new env vars and Playwright browser binaries
+- [ ] **Docker setup** — update `docker-compose.yml` to include the new env vars
 - [ ] **Database backups** — set up automated PostgreSQL backups
 - [ ] **Monitoring** — connect the existing Logfire integration to track classification pipeline health
 - [ ] **CI/CD** — add GitHub Actions for linting, testing, and deployment

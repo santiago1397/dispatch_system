@@ -24,19 +24,14 @@ endpoints.
 
 ---
 
-## Why a Chrome extension (not server-side Playwright)
+## Why a Chrome extension (and nothing server-side)
 
-`distpatch_bot` already has Playwright wired in (`app/browser/manager.py`,
-`BROWSER_ENABLED` env), so server-side scraping would be technically
-trivial. The decision against it is **trust boundary**: the extension reads
-the WhatsApp Web tab inside the user's own browser, while server-side
-Playwright would hold the full session cookie and see *all* the user's
-WhatsApp chats. The scraper only persists whitelisted ones, but the browser
-session exposes everything.
-
-The extension is the right call when the source WhatsApp account is the
-user's personal account. Server-side Playwright is only safe for a
-dedicated dispatch phone.
+The backend does not include Playwright, Puppeteer, or any other headless
+browser. The only path for WhatsApp Web data into this system is the
+extension in `dispatch_extension/`, which reads the WhatsApp Web tab
+inside the user's own browser. The server never holds the WhatsApp
+session cookie and cannot see chats that aren't whitelisted — the
+trust boundary stays in the user's browser.
 
 ---
 

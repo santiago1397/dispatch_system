@@ -119,12 +119,6 @@ class Settings(BaseSettings):
     OPENPHONE_WEBHOOK_SECRET: str = ""  # key returned when creating a webhook
     OPENPHONE_BASE_URL: str = "https://api.openphone.com/v1"
 
-    # === Browser Automation (Playwright) ===
-    BROWSER_ENABLED: bool = False
-    BROWSER_HEADLESS: bool = True
-    BROWSER_CHANNEL: str = "chromium"  # "chromium", "chrome", "msedge"
-    BROWSER_USER_DATA_DIR: str = "browser_data"  # relative to project root
-
     # === Lifecycle Pipeline (Alerts + Daily Stats) ===
     # APScheduler is started inside the FastAPI lifespan when
     # ``SCHEDULER_ENABLED=True`` AND we're not in the pytest test

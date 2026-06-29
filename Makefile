@@ -121,6 +121,13 @@ docker-frontend-logs:
 docker-frontend-build:
 	docker-compose -f docker-compose.frontend.yml build
 
+# === Deploy (push to VPS via SSH) ===
+# Requires an SSH alias `dispatch` in ~/.ssh/config (see scripts/deploy.sh).
+# Override on the command line if needed:
+#   make deploy SSH_ALIAS=myhost VPS_REPO_PATH=/srv/dispatch_bot/dispatch_bot
+deploy:
+	@SSH_ALIAS="$(SSH_ALIAS)" VPS_REPO_PATH="$(VPS_REPO_PATH)" bash scripts/deploy.sh
+
 # === Docker: Production (with Traefik) ===
 docker-prod:
 	docker-compose -f docker-compose.prod.yml up -d
@@ -199,6 +206,10 @@ help:
 	@echo "  make docker-prod          Start production stack"
 	@echo "  make docker-prod-down     Stop production stack"
 	@echo "  make docker-prod-logs     View production logs"
+	@echo ""
+	@echo "Deploy:"
+	@echo "  make deploy               SSH into VPS, git pull, rebuild, restart"
+	@echo "                            Override with SSH_ALIAS=... VPS_REPO_PATH=..."
 	@echo ""
 	@echo "Other:"
 	@echo "  make routes        Show all API routes"

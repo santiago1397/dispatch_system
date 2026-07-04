@@ -9,7 +9,10 @@ from fastapi.responses import JSONResponse
 
 from app.api.deps import CurrentUser, OpenPhoneSvc
 from app.core.config import settings
-from app.core.webhook import SIGNATURE_HEADER, verify_openphone_signature
+from app.core.webhook import (
+    LEGACY_SIGNATURE_HEADER,
+    verify_webhook_from_headers,
+)
 from app.schemas.openphone import (
     IncomingMessageList,
     IncomingMessageRead,
@@ -64,24 +67,20 @@ async def receive_openphone_webhook(
         user_agent,
         content_type,
     )
-    # TEMP DIAGNOSTIC: dump every header so we can see what OpenPhone actually sends.
-    # Remove after identifying the real signature header name + format.
-    import sys
-    print(f"[DIAG] HEADERS: {dict(request.headers)}", file=sys.stderr, flush=True)
 
     body = await request.body()
-    signature = request.headers.get(SIGNATURE_HEADER)
     secret_configured = bool(settings.OPENPHONE_WEBHOOK_SECRET)
-    sig_preview = (signature[:8] + "...") if signature else "<missing>"
+    legacy_sig = request.headers.get(LEGACY_SIGNATURE_HEADER)
+    sig_preview = (legacy_sig[:8] + "...") if legacy_sig else "<missing>"
     logger.info(
-        "OpenPhone webhook: body_bytes=%d signature_header=%s secret_configured=%s",
+        "OpenPhone webhook: body_bytes=%d legacy_sig=%s secret_configured=%s",
         len(body),
         sig_preview,
         secret_configured,
     )
 
-    # Verify signature
-    if not verify_openphone_signature(body, signature, settings.OPENPHONE_WEBHOOK_SECRET):
+    # Verify signature (supports legacy OpenPhone + Quo beta Svix-style).
+    if not verify_webhook_from_headers(body, request.headers, settings.OPENPHONE_WEBHOOK_SECRET):
         logger.warning(
             "OpenPhone webhook REJECTED (bad signature) from=%s sig=%s secret_configured=%s",
             client_host,

@@ -151,3 +151,25 @@ with `Base.metadata.create_all` (see
 `docs/guides/2026-06-04_whatsapp_extension.md` for the snippet). The DB
 name in `.env` and the actual database must match — the CLI does not
 auto-create the database, only its tables.
+
+## Deploy workflow — code changes do NOT need a rebuild
+
+For backend Python changes, **don't run `docker compose build`** — a
+container restart is enough. The current `docker-compose.prod.yml`
+does **not** mount the source tree as a volume (the image is built
+with `COPY . /app`), so restart alone won't pick up edits from the
+host. Use this two-step instead:
+
+```bash
+# 1. Copy the changed file(s) into the running container
+docker cp ./backend/app/<path>/<file>.py dispatch_app:/app/app/<path>/<file>.py
+
+# 2. Restart so uvicorn reloads the Python source
+docker compose -f docker-compose.prod.yml --env-file .env.prod restart app
+```
+
+For changes to `pyproject.toml`, `uv.lock`, the `Dockerfile`, or any
+new file under a package directory not yet present in the image, you
+**do** need a real rebuild — `docker cp` only works for files that
+already exist at the destination path. Same for frontend (`bun.lock`
+changes, new deps, new files).

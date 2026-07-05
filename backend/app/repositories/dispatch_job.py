@@ -29,13 +29,20 @@ async def create_dispatch_job(
 
 
 async def get_by_id(db: AsyncSession, job_id: UUID) -> DispatchJob | None:
-    """Get a dispatch job by ID with company eagerly loaded."""
+    """Get a dispatch job by ID with related rows eagerly loaded.
+
+    ``company``, ``incoming_message``, and the parent ``Job`` are all
+    eager-loaded because the route helper ``_job_to_read`` reads from
+    each of them. Lazy-loading any of them on ``AsyncSession`` raises
+    ``MissingGreenlet`` (no implicit I/O outside an explicit query).
+    """
     query = (
         select(DispatchJob)
         .where(DispatchJob.id == job_id)
         .options(
             selectinload(DispatchJob.company),
             selectinload(DispatchJob.incoming_message),
+            selectinload(DispatchJob.job),
         )
     )
     result = await db.execute(query)
@@ -112,12 +119,16 @@ async def list_dispatch_jobs(
     (logical AND). Use it to hide states the caller doesn't care about
     (e.g., ``["not_a_job"]`` for the operator Jobs view).
     """
+    # Eager-load company + incoming_message + parent Job. ``_job_to_read``
+    # accesses all three; lazy-loading any of them on AsyncSession would
+    # raise MissingGreenlet (no implicit I/O outside an explicit query).
     query = (
         select(DispatchJob)
         .order_by(DispatchJob.created_at.desc())
         .options(
             selectinload(DispatchJob.company),
             selectinload(DispatchJob.incoming_message),
+            selectinload(DispatchJob.job),
         )
     )
     if status:

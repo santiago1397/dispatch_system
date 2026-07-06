@@ -94,6 +94,14 @@ run_ssh "build" ssh "${SSH_ALIAS}" "cd '${VPS_REPO_PATH}' && docker compose -f $
 echo "==> Bringing stack up"
 run_ssh "up" ssh "${SSH_ALIAS}" "cd '${VPS_REPO_PATH}' && docker compose -f ${COMPOSE_FILE} up -d"
 
+# ---- Migrate ----
+# Run Alembic migrations with a one-off container from the freshly built
+# image (--no-deps: DB/deps are already running from `up -d`; --rm: clean up
+# after). Overrides the service command with `alembic upgrade head`.
+echo "==> Running database migrations (alembic upgrade head)"
+run_ssh "migrate" ssh "${SSH_ALIAS}" "cd '${VPS_REPO_PATH}' && docker compose -f ${COMPOSE_FILE} run --rm --no-deps app alembic upgrade head" \
+    || { echo "    Alembic migration failed. Stack is up but the schema may be out of date. Inspect the VPS before serving traffic."; exit 1; }
+
 # ---- Healthcheck ----
 echo "==> Waiting up to ${HEALTHCHECK_TIMEOUT}s for backend healthcheck"
 SECONDS=0

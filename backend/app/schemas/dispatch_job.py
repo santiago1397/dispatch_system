@@ -9,6 +9,21 @@ from pydantic import BaseModel, ConfigDict, Field
 # === API Response Schemas ===
 
 
+class CompanyUpdateRead(BaseModel):
+    """A pending status relay the operator should forward to the company."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    update_kind: str
+    channel: str
+    company_chat_jid: str | None = None
+    company_phone: str | None = None
+    message_text: str
+    sent_at: datetime | None = None
+    created_at: datetime
+
+
 class DispatchJobRead(BaseModel):
     """DispatchJob response schema."""
 
@@ -46,6 +61,17 @@ class DispatchJobRead(BaseModel):
     # the /jobs UI can render the badge + dropdown without a second query.
     lifecycle_status: str | None = None
     lifecycle_status_changed_at: datetime | None = None
+    # Tech-update details, also denormalized from the parent Job:
+    #   - appt_at: appointment time (when lifecycle_status == 'appt_set').
+    #   - follow_up_at: callback reminder time (when 'needs_follow_up').
+    #   - reason: last tech reason code (refused / dns / priceshopping / …).
+    appt_at: datetime | None = None
+    follow_up_at: datetime | None = None
+    reason: str | None = None
+    # The latest unsent status relay the operator should forward to the
+    # company. Populated only on the single-job GET (never in the list, to
+    # avoid a per-row query). Null when nothing is pending.
+    pending_company_update: CompanyUpdateRead | None = None
     created_at: datetime
     updated_at: datetime | None = None
 
@@ -140,10 +166,25 @@ class TechReplyIntent(BaseModel):
     (e.g. ``2026-06-28T15:00:00-05:00``) but free-text fallbacks like
     "tomorrow 3pm" are accepted.
 
+    ``follow_up_at`` is only meaningful when ``intent='needs_follow_up'``:
+    the ISO-8601 time the operator should call the customer back
+    ("price-shopping", "will call back", "wants a call in a few minutes /
+    later"). The model computes it from the current time given in the
+    prompt; when no timing is stated it estimates a sensible default. It
+    powers the ``follow_up_due`` reminder alert.
+
+    ``reason`` is a short machine code for *why* — mainly for the terminal
+    ``canceled`` outcomes so reporting can separate them: ``refused`` (gave
+    price, customer declined), ``dns`` / ``solved`` / ``no_service``
+    (customer didn't need service), plus follow-up reasons like
+    ``priceshopping`` / ``will_cb`` / ``callback``.
+
     ``notes`` carries any extra detail the tech volunteered (ETA, parts
     needed, customer unavailable, etc.) for the operator timeline.
     """
 
     intent: TechReplyIntentCode
     appt_iso: str | None = None
+    follow_up_at: str | None = None
+    reason: str | None = None
     notes: str | None = None

@@ -79,8 +79,35 @@ export interface DispatchJob {
    */
   lifecycle_status: import("./lifecycle").LifecycleStatus | null;
   lifecycle_status_changed_at: string | null;
+  /**
+   * Tech-update details denormalized from the parent Job:
+   *  - appt_at: appointment time (when lifecycle_status === "appt_set").
+   *  - follow_up_at: callback reminder time (when "needs_follow_up").
+   *  - reason: last tech reason code (refused / dns / priceshopping / …).
+   */
+  appt_at: string | null;
+  follow_up_at: string | null;
+  reason: string | null;
+  /**
+   * The latest status update the operator should relay to the company
+   * that sent the job (original job message + the update). The system
+   * never sends it — the operator forwards it natively. Populated only on
+   * the single-job detail fetch; null when nothing is pending.
+   */
+  pending_company_update: CompanyUpdate | null;
   created_at: string;
   updated_at: string | null;
+}
+
+export interface CompanyUpdate {
+  id: string;
+  update_kind: string;
+  channel: "whatsapp" | "openphone" | string;
+  company_chat_jid: string | null;
+  company_phone: string | null;
+  message_text: string;
+  sent_at: string | null;
+  created_at: string;
 }
 
 export interface DispatchJobList {

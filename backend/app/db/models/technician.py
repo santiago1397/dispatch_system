@@ -24,10 +24,15 @@ class Technician(Base, TimestampMixin):
 
     Attributes:
         name: Human-readable display name (operator-facing).
-        phone_e164: Direct phone for SMS / voice escalation. Optional —
-            most comms go through the dispatch chat.
-        whatsapp_chat_jid: The JID of the dispatch chat. UNIQUE so each
-            chat maps to at most one technician.
+        phone_e164: The technician's phone, stored in the same canonical
+            10-digit form as ``Job.customer_phone_e164`` (via
+            ``address_normalizer.normalize_phone``). UNIQUE — this is the
+            key for the OpenPhone (Quo) dispatch chat: a webhook message
+            whose ``from_number`` (inbound) or ``to`` (outbound) normalizes
+            to this value belongs to this technician's chat. Also used for
+            SMS / voice escalation.
+        whatsapp_chat_jid: The JID of the WhatsApp dispatch chat. UNIQUE so
+            each chat maps to at most one technician.
         is_active: Soft-disable flag. Deactivated techs keep their
             history but their chats stop being routed by the dispatch
             detector.
@@ -38,7 +43,9 @@ class Technician(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    phone_e164: Mapped[str | None] = mapped_column(String(15), nullable=True)
+    phone_e164: Mapped[str | None] = mapped_column(
+        String(15), unique=True, nullable=True, index=True
+    )
     whatsapp_chat_jid: Mapped[str | None] = mapped_column(
         String(100), unique=True, nullable=True, index=True
     )

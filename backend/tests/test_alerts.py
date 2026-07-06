@@ -49,6 +49,79 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
+class TestUndispatched:
+    @pytest.mark.anyio
+    async def test_creates_alert_when_pending_past_threshold(self):
+        engine, db = _make_engine_with_db()
+
+        job = _make_job(lifecycle_status="pending", changed_minutes_ago=None)
+        job.first_message_at = datetime.now(UTC) - timedelta(minutes=8)  # > 5
+
+        # Two SQL calls: SELECT pending candidates, then open alert job_ids.
+        candidate_result = MagicMock()
+        candidate_result.scalars.return_value.all.return_value = [job]
+        empty_result = MagicMock()
+        empty_result.scalars.return_value.all.return_value = []
+        db.execute.side_effect = [candidate_result, empty_result]
+
+        with patch(
+            "app.services.alerts.alert_repo.create_or_get_open",
+            new=AsyncMock(),
+        ) as create:
+            created, already = await engine._scan_undispatched(datetime.now(UTC))
+
+        assert created == 1
+        assert already == 0
+        kwargs = create.call_args.kwargs
+        assert kwargs["kind"] == AlertKind.UNDISPATCHED.value
+        assert kwargs["job_id"] == job.id
+        assert kwargs["threshold_minutes"] == 5
+
+    @pytest.mark.anyio
+    async def test_skips_when_within_threshold(self):
+        engine, db = _make_engine_with_db()
+
+        # Fresh pending job (< 5 min) → SQL returns no candidates.
+        candidate_result = MagicMock()
+        candidate_result.scalars.return_value.all.return_value = []
+        empty_result = MagicMock()
+        empty_result.scalars.return_value.all.return_value = []
+        db.execute.side_effect = [candidate_result, empty_result]
+
+        with patch(
+            "app.services.alerts.alert_repo.create_or_get_open",
+            new=AsyncMock(),
+        ) as create:
+            created, _ = await engine._scan_undispatched(datetime.now(UTC))
+
+        assert created == 0
+        create.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_skips_when_alert_already_open(self):
+        engine, db = _make_engine_with_db()
+
+        job = _make_job(lifecycle_status="pending", changed_minutes_ago=None)
+        job.first_message_at = datetime.now(UTC) - timedelta(minutes=8)
+
+        candidate_result = MagicMock()
+        candidate_result.scalars.return_value.all.return_value = [job]
+        # Second call: this job already has an open undispatched alert.
+        open_ids_result = MagicMock()
+        open_ids_result.scalars.return_value.all.return_value = [job.id]
+        db.execute.side_effect = [candidate_result, open_ids_result]
+
+        with patch(
+            "app.services.alerts.alert_repo.create_or_get_open",
+            new=AsyncMock(),
+        ) as create:
+            created, already = await engine._scan_undispatched(datetime.now(UTC))
+
+        assert created == 0
+        assert already == 1
+        create.assert_not_called()
+
+
 class TestStuckDispatched:
     @pytest.mark.anyio
     async def test_creates_alert_when_dispatched_past_threshold(self):
@@ -201,6 +274,67 @@ class TestApptTimePassed:
             new=AsyncMock(),
         ) as create:
             created, _ = await engine._scan_appt_time_passed(datetime.now(UTC))
+
+        assert created == 0
+        create.assert_not_called()
+
+
+class TestFollowUpDue:
+    @pytest.mark.anyio
+    async def test_flags_when_follow_up_at_has_passed(self):
+        engine, db = _make_engine_with_db()
+        job_id = uuid4()
+        follow_up_at = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
+        event = SimpleNamespace(
+            id=uuid4(),
+            job_id=job_id,
+            created_at=datetime.now(UTC) - timedelta(minutes=30),
+            payload={"follow_up_at": follow_up_at},
+        )
+
+        # candidates → open alert ids → later-event check
+        candidate_result = MagicMock()
+        candidate_result.scalars.return_value.all.return_value = [event]
+        empty_result = MagicMock()
+        empty_result.scalars.return_value.all.return_value = []
+        later_result = MagicMock()
+        later_result.scalar_one_or_none.return_value = None
+        db.execute.side_effect = [candidate_result, empty_result, later_result]
+
+        with patch(
+            "app.services.alerts.alert_repo.create_or_get_open",
+            new=AsyncMock(),
+        ) as create:
+            created, _ = await engine._scan_follow_up_due(datetime.now(UTC))
+
+        assert created == 1
+        assert create.call_args.kwargs["kind"] == AlertKind.FOLLOW_UP_DUE.value
+        assert create.call_args.kwargs["job_id"] == job_id
+
+    @pytest.mark.anyio
+    async def test_skips_when_follow_up_still_in_future(self):
+        engine, db = _make_engine_with_db()
+        follow_up_at = (datetime.now(UTC) + timedelta(minutes=20)).isoformat()
+        event = SimpleNamespace(
+            id=uuid4(),
+            job_id=uuid4(),
+            created_at=datetime.now(UTC) - timedelta(minutes=1),
+            payload={"follow_up_at": follow_up_at},
+        )
+
+        candidate_result = MagicMock()
+        candidate_result.scalars.return_value.all.return_value = [event]
+        empty_result = MagicMock()
+        empty_result.scalars.return_value.all.return_value = []
+        later_result = MagicMock()
+        later_result.scalar_one_or_none.return_value = None
+        db.execute.side_effect = [candidate_result, empty_result, later_result]
+
+        with patch(
+            "app.services.alerts.alert_repo.create_or_get_open",
+            new=AsyncMock(),
+        ) as create:
+            created, _ = await engine._scan_follow_up_due(datetime.now(UTC))
 
         assert created == 0
         create.assert_not_called()

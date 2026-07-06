@@ -31,6 +31,8 @@ from app.repositories import job_lifecycle_event as lifecycle_event_repo
 
 from app.repositories import alert as alert_repo
 
+from app.repositories import company_update as company_update_repo
+
 from app.repositories import daily_stats as daily_stats_repo
 
 __all__ = [
@@ -49,5 +51,6 @@ __all__ = [
     "technician_repo",
     "lifecycle_event_repo",
     "alert_repo",
+    "company_update_repo",
     "daily_stats_repo",
 ]

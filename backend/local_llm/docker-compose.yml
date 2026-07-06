@@ -46,16 +46,16 @@ services:
               count: all
               capabilities: [gpu]
     # Throughput tuning for the RTX 3070 / 3070 Ti (8 GB VRAM).
-    # - NUM_PARALLEL=4 fits comfortably for ~2 GB models (llama3.2:3b,
-    #   qwen2.5:3b). With 4 slots × 2 GB + ~400 MB KV cache = ~8.4 GB
-    #   — tight but OK on 8 GB cards.
-    # - For 4B+ models (gemma3:4b at 3.3 GB), drop to NUM_PARALLEL=2
-    #   to avoid OOM.
+    # - NUM_PARALLEL=2 is the safe setting for ~2.5–3 GB models
+    #   (qwen2.5:3b is 2.8 GB, gemma3:4b is 3.3 GB). 2 slots × ~3 GB +
+    #   ~400 MB KV cache = ~6.4 GB — fits on 8 GB.
+    # - llama3.2:3b (2.0 GB) can fit 4 parallel slots but doesn't
+    #   actually use them efficiently on this card (util stays ~30%).
     # - KV_CACHE_TYPE=q8_0 halves the per-request KV-cache footprint.
     # - CONTEXT_LENGTH=4096 caps the context window — our prompts are at
     #   most ~3500 tokens, so anything bigger wastes KV cache.
     environment:
-      - OLLAMA_NUM_PARALLEL=4
+      - OLLAMA_NUM_PARALLEL=2
       - OLLAMA_KV_CACHE_TYPE=q8_0
       - OLLAMA_CONTEXT_LENGTH=4096
       - OLLAMA_FLASH_ATTENTION=1

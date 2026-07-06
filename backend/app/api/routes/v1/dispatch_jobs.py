@@ -7,8 +7,9 @@ from fastapi import APIRouter, Query
 
 from app.api.deps import CurrentUser, DBSession
 from app.db.models.job_lifecycle_event import LifecycleEventSource
+from app.repositories import company_update_repo
 from app.repositories import job as job_repo
-from app.schemas.dispatch_job import DispatchJobList, DispatchJobRead
+from app.schemas.dispatch_job import CompanyUpdateRead, DispatchJobList, DispatchJobRead
 from app.schemas.job_lifecycle_event import (
     JobLifecycleEventList,
     JobLifecycleEventRead,
@@ -20,13 +21,23 @@ from app.services.lifecycle import LifecycleService
 router = APIRouter()
 
 
-def _job_to_read(job) -> DispatchJobRead:
-    """Convert a DispatchJob ORM object to a DispatchJobRead schema."""
+def _job_to_read(job, *, company_update=None) -> DispatchJobRead:
+    """Convert a DispatchJob ORM object to a DispatchJobRead schema.
+
+    ``company_update`` (the latest pending relay for the parent Job) is
+    passed only by the single-job GET — the list view leaves it None so it
+    doesn't run a per-row query.
+    """
     data = DispatchJobRead.model_validate(job)
     raw = job.extraction_raw or {}
     parent_job = job.job
     return data.model_copy(
         update={
+            "pending_company_update": (
+                CompanyUpdateRead.model_validate(company_update)
+                if company_update is not None
+                else None
+            ),
             "company_name": job.company.display_name if job.company else None,
             "source": job.incoming_message.source if job.incoming_message else None,
             # Closing-flow extras live in extraction_raw on the closing
@@ -38,6 +49,9 @@ def _job_to_read(job) -> DispatchJobRead:
             "lifecycle_status_changed_at": (
                 parent_job.lifecycle_status_changed_at if parent_job else None
             ),
+            "appt_at": parent_job.appt_at if parent_job else None,
+            "follow_up_at": parent_job.follow_up_at if parent_job else None,
+            "reason": parent_job.last_tech_reason if parent_job else None,
         }
     )
 
@@ -97,7 +111,12 @@ async def get_dispatch_job(
     """Get a single dispatch job by ID."""
     service = DispatchJobService(db)
     job = await service.get_job(job_id)
-    return _job_to_read(job)
+    relay = (
+        await company_update_repo.get_latest_pending_for_job(db, job.job_id)
+        if job.job_id is not None
+        else None
+    )
+    return _job_to_read(job, company_update=relay)
 
 
 @router.post("/jobs/{job_id}/reclassify", response_model=DispatchJobRead)

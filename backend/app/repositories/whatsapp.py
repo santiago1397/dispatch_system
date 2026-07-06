@@ -445,6 +445,62 @@ async def list_messages(
     return list(result.scalars().all())
 
 
+async def count_operator_messages_between(
+    db: AsyncSession,
+    *,
+    chat_jid: str,
+    after: datetime,
+    until: datetime,
+) -> int:
+    """Count operator (``is_from_me``) messages in ``(after, until]``.
+
+    Used by the reject detector to enforce the "next two operator
+    messages" window: a reject reply only counts if it is the 1st or 2nd
+    operator message after the job message. ``after`` is exclusive (the
+    job's own timestamp), ``until`` inclusive (the reply itself).
+    """
+    query = (
+        select(func.count())
+        .select_from(WhatsappMessage)
+        .where(
+            WhatsappMessage.chat_jid == chat_jid,
+            WhatsappMessage.is_from_me.is_(True),
+            WhatsappMessage.timestamp > after,
+            WhatsappMessage.timestamp <= until,
+        )
+    )
+    result = await db.execute(query)
+    return result.scalar_one()
+
+
+async def count_tech_messages_between(
+    db: AsyncSession,
+    *,
+    chat_jid: str,
+    after: datetime,
+    until: datetime,
+) -> int:
+    """Count technician (``is_from_me=False``) messages in ``(after, until]``.
+
+    The tech-side twin of :func:`count_operator_messages_between`: enforces
+    the "next two messages" window for tech accept/reject when the reply
+    does not directly quote the dispatch. ``after`` is the dispatch time
+    (exclusive), ``until`` the reply (inclusive).
+    """
+    query = (
+        select(func.count())
+        .select_from(WhatsappMessage)
+        .where(
+            WhatsappMessage.chat_jid == chat_jid,
+            WhatsappMessage.is_from_me.is_(False),
+            WhatsappMessage.timestamp > after,
+            WhatsappMessage.timestamp <= until,
+        )
+    )
+    result = await db.execute(query)
+    return result.scalar_one()
+
+
 async def count_messages(
     db: AsyncSession,
     *,

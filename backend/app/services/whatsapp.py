@@ -208,6 +208,24 @@ class WhatsappService:
                         )
                     continue
 
+                # Operator reject branch — an operator reply ("pass",
+                # "have it", "<zip> pass", or a re-paste of the job with a
+                # short note) in a job-source chat declines the most-recent
+                # pending job from that chat. On a hit the job is
+                # transitioned to the terminal ``rejected`` status and this
+                # message is NOT mirrored/classified (a re-paste would
+                # otherwise spawn a spurious linked DispatchJob).
+                if getattr(msg, "is_from_me", False):
+                    try:
+                        if await self._maybe_reject_job(msg, batch_id):
+                            continue
+                    except Exception:
+                        logger.exception(
+                            "Failed reject-detection for whatsapp msg %s in %s",
+                            getattr(msg, "wa_message_id", "?"),
+                            getattr(msg, "chat_jid", "?"),
+                        )
+
                 try:
                     incoming = await openphone_repo.create_incoming_message(
                         self.db,
@@ -519,6 +537,83 @@ class WhatsappService:
             chat.chat_jid,
             wa_message_id,
         )
+
+    # === Operator reject branch ===
+
+    async def _maybe_reject_job(self, msg: "object", batch_id: str) -> bool:
+        """Reject the pending job an operator reply declines, if any.
+
+        Returns ``True`` when a job was transitioned to ``rejected`` (the
+        caller then skips mirror/classify for this message). Returns
+        ``False`` when the message is not a reject, there is no pending job
+        from this chat to reject, or the reply falls outside the
+        two-operator-message window.
+
+        The flow is: (1) find the most-recent still-pending job originating
+        from this chat before the reply, (2) confirm the reply is a reject
+        signal (phrase or a re-paste of that job's body with a note),
+        (3) confirm the reply is within the next two operator messages, and
+        (4) transition the job to the terminal ``rejected`` status via the
+        lifecycle gate (which also auto-resolves any open alerts).
+        """
+        from app.db.models.job_lifecycle_event import LifecycleEventSource
+        from app.repositories import job as job_repo
+        from app.services import reject_detector
+        from app.services.lifecycle import LifecycleService, LifecycleStatus
+
+        body = (getattr(msg, "body", None) or "").strip()
+        chat_jid = getattr(msg, "chat_jid", None)
+        timestamp = getattr(msg, "timestamp", None)
+        if not body or not chat_jid or timestamp is None:
+            return False
+
+        candidate = await job_repo.find_reject_candidate(
+            self.db, chat_jid=chat_jid, before=timestamp
+        )
+        if candidate is None:
+            return False
+        job, source_body = candidate
+
+        if not reject_detector.is_reject_signal(body, source_body):
+            return False
+
+        operator_msg_count = await whatsapp_repo.count_operator_messages_between(
+            self.db,
+            chat_jid=chat_jid,
+            after=job.first_message_at,
+            until=timestamp,
+        )
+        if operator_msg_count > 2:
+            logger.info(
+                "REJECT_TOO_LATE batch_id=%s chat_jid=%s job_id=%s operator_msgs=%d",
+                batch_id,
+                chat_jid,
+                job.id,
+                operator_msg_count,
+            )
+            return False
+
+        await LifecycleService(self.db).transition(
+            job=job,
+            to_status=LifecycleStatus.REJECTED,
+            source=LifecycleEventSource.OPERATOR_REJECT,
+            payload={
+                "chat_jid": chat_jid,
+                "wa_message_id": getattr(msg, "wa_message_id", None),
+                "body_preview": body[:120],
+                "operator_msg_index": operator_msg_count,
+                "batch_id": batch_id,
+            },
+        )
+        logger.info(
+            "REJECT_APPLIED batch_id=%s chat_jid=%s job_id=%s wa_message_id=%s operator_msgs=%d",
+            batch_id,
+            chat_jid,
+            job.id,
+            getattr(msg, "wa_message_id", None),
+            operator_msg_count,
+        )
+        return True
 
     # === Tracked Chats ===
 

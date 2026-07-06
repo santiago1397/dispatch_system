@@ -11,6 +11,8 @@ const STYLE: Record<LifecycleStatus, string> = {
     "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200",
   dispatched:
     "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200",
+  accepted:
+    "bg-teal-100 text-teal-800 dark:bg-teal-900/40 dark:text-teal-200",
   in_progress:
     "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200",
   appt_set:
@@ -19,6 +21,8 @@ const STYLE: Record<LifecycleStatus, string> = {
     "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-200",
   canceled:
     "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200",
+  rejected:
+    "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-200",
   completed:
     "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200",
   closed:

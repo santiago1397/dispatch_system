@@ -240,6 +240,110 @@ async def find_dispatch_target(
     return result.scalar_one_or_none()
 
 
+async def find_reject_candidate(
+    db: AsyncSession,
+    *,
+    chat_jid: str,
+    before: datetime,
+) -> tuple[Job, str] | None:
+    """Find the pending Job a reject reply refers to, with its source body.
+
+    The reply "pass"/"have it"/re-paste carries no address, so it is tied
+    to the most-recent still-``pending`` Job that originated from the same
+    chat and whose first message predates the reply. Returns ``(job,
+    source_body)`` — ``source_body`` is one of the job's message bodies,
+    used for the re-paste similarity check — or ``None`` when there is no
+    pending job from this chat to reject.
+
+    Only ``pending`` jobs are eligible: a dispatched/closed/rejected job is
+    never un-done by a later reject phrase, and this filter also makes the
+    detection idempotent under the extension's re-send behaviour (once the
+    job is ``rejected`` it stops matching).
+    """
+    from app.db.models.dispatch_job import DispatchJob
+    from app.db.models.openphone import IncomingMessage
+
+    query = (
+        select(Job, IncomingMessage.content)
+        .join(DispatchJob, DispatchJob.job_id == Job.id)
+        .join(IncomingMessage, IncomingMessage.id == DispatchJob.incoming_message_id)
+        .where(
+            IncomingMessage.raw_payload["chat_jid"].astext == chat_jid,
+            Job.lifecycle_status == "pending",
+            Job.first_message_at < before,
+        )
+        .order_by(Job.first_message_at.desc())
+        .limit(1)
+    )
+    row = (await db.execute(query)).first()
+    if row is None:
+        return None
+    job, content = row
+    return job, (content or "")
+
+
+async def find_origin_incoming_for_job(db: AsyncSession, job_id: uuid.UUID):
+    """Return the earliest IncomingMessage that opened this Job.
+
+    Used to compose the company-relay message: it carries the original job
+    body (``content``) and the company's address (WhatsApp
+    ``raw_payload.chat_jid`` or OpenPhone ``from_number``). Returns the
+    ``IncomingMessage`` ORM row, or ``None`` if the job has no dispatch
+    children yet.
+    """
+    from app.db.models.dispatch_job import DispatchJob
+    from app.db.models.openphone import IncomingMessage
+
+    query = (
+        select(IncomingMessage)
+        .join(DispatchJob, DispatchJob.incoming_message_id == IncomingMessage.id)
+        .where(DispatchJob.job_id == job_id)
+        .order_by(IncomingMessage.created_at.asc())
+        .limit(1)
+    )
+    return (await db.execute(query)).scalar_one_or_none()
+
+
+async def find_reject_candidate_openphone(
+    db: AsyncSession,
+    *,
+    counterparty: str,
+    before: datetime,
+) -> tuple[Job, str] | None:
+    """OpenPhone twin of :func:`find_reject_candidate`.
+
+    The operator's "pass" reply is an *outbound* OpenPhone message to the
+    company that texted the job in. The conversation is keyed on that
+    counterparty phone: match the pending Job whose originating *inbound*
+    message came ``from_number == counterparty``. ``counterparty`` is the
+    raw phone string from the reply's ``to_numbers`` — matched against the
+    raw inbound ``from_number`` so both sides come from Quo in the same
+    format. Returns ``(job, source_body)`` or ``None``.
+    """
+    from app.db.models.dispatch_job import DispatchJob
+    from app.db.models.openphone import IncomingMessage
+
+    query = (
+        select(Job, IncomingMessage.content)
+        .join(DispatchJob, DispatchJob.job_id == Job.id)
+        .join(IncomingMessage, IncomingMessage.id == DispatchJob.incoming_message_id)
+        .where(
+            IncomingMessage.source == "openphone",
+            IncomingMessage.direction == "incoming",
+            IncomingMessage.from_number == counterparty,
+            Job.lifecycle_status == "pending",
+            Job.first_message_at < before,
+        )
+        .order_by(Job.first_message_at.desc())
+        .limit(1)
+    )
+    row = (await db.execute(query)).first()
+    if row is None:
+        return None
+    job, content = row
+    return job, (content or "")
+
+
 async def set_lifecycle_status(
     db: AsyncSession,
     *,

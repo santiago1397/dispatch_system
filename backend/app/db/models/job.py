@@ -107,6 +107,19 @@ class Job(Base, TimestampMixin):
         DateTime(timezone=True), nullable=True
     )
 
+    # Denormalized tech-update fields so the /jobs list + detail can render
+    # them without a per-row lifecycle-event query. Written by
+    # ``LifecycleService.transition`` from the tech-reply payload:
+    #   - ``appt_at``: appointment time, set on the ``appt_set`` transition.
+    #   - ``follow_up_at``: callback reminder time, set on ``needs_follow_up``.
+    #   - ``last_tech_reason``: most recent reason code (refused / dns /
+    #     solved / no_service / priceshopping / will_cb / callback).
+    # Only set when the payload carries a parseable value; otherwise left
+    # as-is (the raw phrase still lives in the lifecycle event payload).
+    appt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    follow_up_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_tech_reason: Mapped[str | None] = mapped_column(String(30), nullable=True)
+
     # Original inbound contact for outbound-draft routing. Frozen at Job
     # creation so the same company phone (OpenPhone) or chat_jid
     # (WhatsApp) is used for every status-update draft the Job generates.

@@ -130,6 +130,15 @@ class Settings(BaseSettings):
     # minutes.
     SCHEDULER_ENABLED: bool = True
     ALERT_ENGINE_INTERVAL_MINUTES: int = 5
+    # A pending job must be dispatched to a tech or rejected by the
+    # operator within this window; past it the engine raises an
+    # ``undispatched`` alert. Detection latency is bounded by
+    # ALERT_ENGINE_INTERVAL_MINUTES (the scan cadence).
+    ALERTS_UNDISPATCHED_MINUTES: int = 5
+    # After a tech update, the operator must relay it to the source company
+    # (natively — we never send). If no operator outbound to the company is
+    # observed within this window, a ``company_update_unsent`` reminder fires.
+    ALERTS_COMPANY_UPDATE_UNSENT_MINUTES: int = 7
     ALERTS_STUCK_DISPATCHED_MINUTES: int = 240  # 4 hours
     ALERTS_STUCK_IN_PROGRESS_MINUTES: int = 480  # 8 hours
     ALERTS_APPT_PASSED_GRACE_MINUTES: int = 60  # 1 hour after the appt

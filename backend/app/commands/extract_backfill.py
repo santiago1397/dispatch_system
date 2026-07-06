@@ -61,6 +61,7 @@ import csv
 import hashlib
 import json
 import logging
+import os
 import re
 import time
 from pathlib import Path
@@ -80,6 +81,14 @@ logger = logging.getLogger(__name__)
 
 #: Default Ollama endpoint. Matches dispatch_bot/backend/local_llm/docker-compose.yml.
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
+
+#: Default MiniMax endpoint (global region, OpenAI-compatible).
+DEFAULT_MINIMAX_URL = "https://api.minimax.io/v1"
+
+#: Default MiniMax model. M2.7 is a reasoning model but at a lower tier
+#: than M3 flagship — adequate for structured field extraction and
+#: friendlier to Coding Plan quotas.
+DEFAULT_MINIMAX_MODEL = "MiniMax-M2.7"
 
 #: Default model. ``llama3.2:3b`` is small enough for CPU but unreliable
 #: on JSON arrays — see ``--batch-size`` guidance below. NOT pinned to a
@@ -684,21 +693,25 @@ def _run_dedup_pass(extractions_path: Path) -> dict:
 async def extract_one(
     client: httpx.AsyncClient,
     *,
+    provider: str,
     model: str,
     company: str,
     direction: str,
     body: str,
     temperature: float,
     max_retries: int,
+    api_key: str = "",
 ) -> tuple[dict | None, str | None, int]:
-    """Call Ollama for a single message. Returns (fields, error, latency_ms)."""
+    """Call the configured provider for a single message. Returns (fields, error, latency_ms)."""
     user_message = _build_user_message(company, direction, body)
-    parsed, error_msg, latency = await _call_ollama(
+    parsed, error_msg, latency = await _call_llm(
         client,
+        provider=provider,
         model=model,
         user_message=user_message,
         temperature=temperature,
         max_retries=max_retries,
+        api_key=api_key,
     )
     if error_msg or parsed is None:
         return None, error_msg or "empty_response", latency
@@ -708,6 +721,131 @@ async def extract_one(
     # crash on lists/dicts the model occasionally returns.
     parsed = _coerce_fields_to_strings(parsed)
     return parsed, None, latency
+
+
+async def _call_llm(
+    client: httpx.AsyncClient,
+    *,
+    provider: str,
+    model: str,
+    user_message: str,
+    temperature: float,
+    max_retries: int,
+    api_key: str = "",
+) -> tuple[dict | list | None, str | None, int]:
+    """Dispatch to the requested provider. Response shape is provider-agnostic."""
+    if provider == "minimax":
+        return await _call_minimax(
+            client,
+            model=model,
+            user_message=user_message,
+            temperature=temperature,
+            max_retries=max_retries,
+            api_key=api_key,
+        )
+    return await _call_ollama(
+        client,
+        model=model,
+        user_message=user_message,
+        temperature=temperature,
+        max_retries=max_retries,
+    )
+
+
+async def _call_minimax(
+    client: httpx.AsyncClient,
+    *,
+    model: str,
+    user_message: str,
+    temperature: float,
+    max_retries: int,
+    api_key: str,
+) -> tuple[dict | list | None, str | None, int]:
+    """MiniMax OpenAI-compatible /chat/completions call.
+
+    Differences vs Ollama:
+    - Sends SYSTEM_PROMPT as a real ``role: system`` message (Ollama path
+      relied on ``format:"json"`` and a system-less messages array, which
+      is why extractions.csv had weak field recall).
+    - Passes ``reasoning_split: true`` so ``<think>...</think>`` reasoning
+      is stripped from ``content`` (M2.7 and M3 are reasoning models).
+    - ``max_tokens`` sized for a full 13-field JSON object plus safety.
+    """
+    started = time.monotonic()
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    base_payload = {
+        "model": model,
+        "temperature": temperature,
+        "max_tokens": 2048,
+        "stream": False,
+        "reasoning_split": True,
+    }
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_message},
+    ]
+    try:
+        response = await client.post(
+            "/chat/completions",
+            headers=headers,
+            json={**base_payload, "messages": messages},
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except httpx.HTTPStatusError as e:
+        return None, f"http_{e.response.status_code}", int((time.monotonic() - started) * 1000)
+    except Exception as e:
+        return None, f"request_error:{type(e).__name__}", int((time.monotonic() - started) * 1000)
+
+    latency_ms = int((time.monotonic() - started) * 1000)
+    choices = payload.get("choices") or []
+    if not choices:
+        return None, "empty_response", latency_ms
+    content = ((choices[0].get("message") or {}).get("content") or "").strip()
+    if not content:
+        return None, "empty_response", latency_ms
+
+    parsed = _try_parse_json(content)
+    if parsed is not None:
+        return parsed, None, latency_ms
+
+    if max_retries > 0:
+        retry_messages = messages + [
+            {"role": "assistant", "content": content},
+            {
+                "role": "user",
+                "content": (
+                    "Your previous response was not valid JSON. "
+                    "Return ONLY the JSON object — no markdown, no prose."
+                ),
+            },
+        ]
+        try:
+            response = await client.post(
+                "/chat/completions",
+                headers=headers,
+                json={**base_payload, "messages": retry_messages},
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except Exception as e:
+            return None, f"retry_request_error:{type(e).__name__}", latency_ms
+        retry_choices = payload.get("choices") or []
+        retry_content = (
+            ((retry_choices[0].get("message") or {}).get("content") or "").strip()
+            if retry_choices
+            else ""
+        )
+        if retry_content:
+            parsed = _try_parse_json(retry_content)
+            if parsed is not None:
+                return parsed, None, int((time.monotonic() - started) * 1000)
+        return None, "json_parse_error", int((time.monotonic() - started) * 1000)
+
+    return None, "json_parse_error", latency_ms
 
 
 async def extract_batch(
@@ -828,11 +966,13 @@ async def process_row(
     client: httpx.AsyncClient,
     *,
     semaphore: asyncio.Semaphore,
+    provider: str,
     model: str,
     raw_dir: Path,
     row: dict,
     temperature: float,
     max_retries: int,
+    api_key: str = "",
 ) -> dict:
     """Load the raw body, call Ollama, return one output row."""
     cn_id = row["conversation_id"]
@@ -872,12 +1012,14 @@ async def process_row(
     async with semaphore:
         fields, err, latency = await extract_one(
             client,
+            provider=provider,
             model=model,
             company=company,
             direction=direction,
             body=body,
             temperature=temperature,
             max_retries=max_retries,
+            api_key=api_key,
         )
     output["extraction_error"] = err or ""
 
@@ -929,10 +1071,16 @@ async def process_row(
 # =============================================================================
 
 
+def _model_slug(model: str) -> str:
+    """Filesystem-safe slug from a model tag. ``MiniMax-M2.7`` → ``minimax_m27``."""
+    return re.sub(r"[^a-z0-9]+", "_", model.lower()).strip("_")
+
+
 async def run_extraction(
     *,
     manifest_dir: Path,
-    ollama_url: str,
+    provider: str,
+    base_url: str,
     model: str,
     concurrency: int,
     limit: int | None,
@@ -940,6 +1088,7 @@ async def run_extraction(
     batch_by_company: bool,
     temperature: float,
     max_retries: int,
+    api_key: str = "",
 ) -> None:
     """Run the extraction pipeline against ``manifest_dir``."""
     if batch_size < 1 or batch_size > MAX_BATCH_SIZE:
@@ -948,22 +1097,40 @@ async def run_extraction(
 
     manifest_path = manifest_dir / "manifest.csv"
     raw_dir = manifest_dir / "raw"
-    extractions_path = manifest_dir / EXTRACTIONS_FILENAME
-    ledger_path = manifest_dir / RESUME_LEDGER_FILENAME
-    log_path = manifest_dir / EXTRACTION_LOG_FILENAME
+    # For non-default provider/model, suffix output files by model slug so
+    # runs don't clobber each other (matches the user's `extractions_llama32_3b`
+    # naming convention). Ollama default stays on the legacy filenames.
+    if provider == "ollama" and model == DEFAULT_MODEL:
+        extractions_name = EXTRACTIONS_FILENAME
+        ledger_name = RESUME_LEDGER_FILENAME
+        log_name = EXTRACTION_LOG_FILENAME
+    else:
+        slug = _model_slug(model)
+        extractions_name = f"extractions_{slug}.csv"
+        ledger_name = f"extracted_ids_{slug}.txt"
+        log_name = f"extraction_{slug}.log"
+    extractions_path = manifest_dir / extractions_name
+    ledger_path = manifest_dir / ledger_name
+    log_path = manifest_dir / log_name
 
     if not manifest_path.exists():
         error(f"No manifest.csv at {manifest_path}")
         raise click.ClickException(f"manifest.csv not found in {manifest_dir}")
 
+    if provider == "minimax" and not api_key:
+        error("MINIMAX_API_KEY missing — set it in backend/.env or pass --api-key")
+        raise click.ClickException("MINIMAX_API_KEY required for --provider minimax")
+
     info(f"Manifest:      {manifest_path}")
     info(f"Raw dir:       {raw_dir}")
-    info(f"Ollama URL:    {ollama_url}")
+    info(f"Provider:      {provider}")
+    info(f"Base URL:      {base_url}")
     info(f"Model:         {model}")
     info(f"Concurrency:   {concurrency}")
     info(f"Batch size:    {batch_size}")
     info(f"By company:    {batch_by_company}")
     info(f"Temperature:   {temperature}")
+    info(f"Output:        {extractions_path}")
 
     # Load manifest and filter to is_job_likely=true
     with manifest_path.open("r", encoding="utf-8", newline="") as fh:
@@ -990,19 +1157,21 @@ async def run_extraction(
         success("Nothing to do.")
         return
 
-    # Sanity check Ollama is reachable + model is loaded
-    async with httpx.AsyncClient(base_url=ollama_url, timeout=10.0) as probe:
-        try:
-            tags = (await probe.get("/api/tags")).json()
-        except Exception as e:
-            error(f"Cannot reach Ollama at {ollama_url}: {type(e).__name__}: {e}")
-            raise click.ClickException("Ollama unreachable — is `docker compose up -d` running?")
-        available = {m["name"] for m in tags.get("models", [])}
-        if model not in available:
-            error(f"Model {model!r} not loaded in Ollama. Available: {sorted(available)}")
-            raise click.ClickException(
-                f"Run: docker compose exec ollama ollama pull {model}"
-            )
+    # Sanity check the provider is reachable + model is available.
+    if provider == "ollama":
+        async with httpx.AsyncClient(base_url=base_url, timeout=10.0) as probe:
+            try:
+                tags = (await probe.get("/api/tags")).json()
+            except Exception as e:
+                error(f"Cannot reach Ollama at {base_url}: {type(e).__name__}: {e}")
+                raise click.ClickException("Ollama unreachable — is `docker compose up -d` running?")
+            available = {m["name"] for m in tags.get("models", [])}
+            if model not in available:
+                error(f"Model {model!r} not loaded in Ollama. Available: {sorted(available)}")
+                raise click.ClickException(
+                    f"Run: docker compose exec ollama ollama pull {model}"
+                )
+    # MiniMax: connectivity was verified during smoke testing; no /tags equivalent.
 
     # Process in parallel
     semaphore = asyncio.Semaphore(concurrency)
@@ -1011,17 +1180,19 @@ async def run_extraction(
     started = time.monotonic()
 
     with log_path.open("a", encoding="utf-8") as log_fh:
-        async with httpx.AsyncClient(base_url=ollama_url, timeout=REQUEST_TIMEOUT_SECONDS) as client:
+        async with httpx.AsyncClient(base_url=base_url, timeout=REQUEST_TIMEOUT_SECONDS) as client:
             tasks = [
                 asyncio.create_task(
                     process_row(
                         client,
                         semaphore=semaphore,
+                        provider=provider,
                         model=model,
                         raw_dir=raw_dir,
                         row=row,
                         temperature=temperature,
                         max_retries=max_retries,
+                        api_key=api_key,
                     )
                 )
                 for row in rows
@@ -1123,7 +1294,7 @@ async def run_extraction(
 
 @command(
     "extract-backfill",
-    help="Run 13-field LLM extraction on backfilled messages via local Ollama",
+    help="Run 13-field LLM extraction on backfilled messages via Ollama or MiniMax",
 )
 @click.option(
     "--manifest-dir",
@@ -1133,16 +1304,32 @@ async def run_extraction(
     help="Path to a backfill-openphone output directory (contains manifest.csv + raw/).",
 )
 @click.option(
+    "--provider",
+    type=click.Choice(["ollama", "minimax"]),
+    default="ollama",
+    show_default=True,
+    help="LLM provider. ``minimax`` uses MINIMAX_API_KEY from env against api.minimax.io.",
+)
+@click.option(
     "--ollama-url",
     default=DEFAULT_OLLAMA_URL,
     show_default=True,
-    help="Base URL of the local Ollama server.",
+    help="Base URL of the local Ollama server (used when --provider=ollama).",
+)
+@click.option(
+    "--minimax-url",
+    default=DEFAULT_MINIMAX_URL,
+    show_default=True,
+    help="Base URL of the MiniMax OpenAI-compatible endpoint.",
 )
 @click.option(
     "--model",
-    default=DEFAULT_MODEL,
-    show_default=True,
-    help="Ollama model tag to use for extraction.",
+    default=None,
+    show_default=False,
+    help=(
+        f"Model tag. Defaults to {DEFAULT_MODEL!r} for ollama, "
+        f"{DEFAULT_MINIMAX_MODEL!r} for minimax."
+    ),
 )
 @click.option(
     "--concurrency",
@@ -1194,8 +1381,10 @@ async def run_extraction(
 )
 def extract_backfill(
     manifest_dir: Path,
+    provider: str,
     ollama_url: str,
-    model: str,
+    minimax_url: str,
+    model: str | None,
     concurrency: int,
     limit: int | None,
     batch_size: int,
@@ -1215,16 +1404,36 @@ def extract_backfill(
 
     Safe to re-run: ``extracted_ids.txt`` tracks completed message_ids.
     """
+    # Resolve provider-specific defaults + endpoint + key.
+    if provider == "minimax":
+        resolved_model = model or DEFAULT_MINIMAX_MODEL
+        base_url = minimax_url
+        # MINIMAX_API_KEY isn't in app.core.config.Settings, so pydantic-settings
+        # won't lift it into os.environ. Load backend/.env explicitly.
+        try:
+            from dotenv import load_dotenv
+
+            load_dotenv()
+        except ImportError:
+            pass
+        api_key = os.environ.get("MINIMAX_API_KEY", "")
+    else:
+        resolved_model = model or DEFAULT_MODEL
+        base_url = ollama_url
+        api_key = ""
+
     asyncio.run(
         run_extraction(
             manifest_dir=manifest_dir,
-            ollama_url=ollama_url,
-            model=model,
+            provider=provider,
+            base_url=base_url,
+            model=resolved_model,
             concurrency=concurrency,
             limit=limit,
             batch_size=batch_size,
             batch_by_company=batch_by_company,
             temperature=temperature,
             max_retries=max_retries,
+            api_key=api_key,
         )
     )

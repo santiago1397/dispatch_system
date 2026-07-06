@@ -12,10 +12,12 @@
 export const LIFECYCLE_STATUSES = [
   "pending",
   "dispatched",
+  "accepted",
   "in_progress",
   "appt_set",
   "needs_follow_up",
   "canceled",
+  "rejected",
   "completed",
   "closed",
 ] as const;
@@ -32,20 +34,24 @@ export type LifecycleStatus = (typeof LIFECYCLE_STATUSES)[number];
 export const MANUAL_LIFECYCLE_TRANSITIONS: LifecycleStatus[] = [
   "pending",
   "dispatched",
+  "accepted",
   "in_progress",
   "appt_set",
   "needs_follow_up",
   "canceled",
+  "rejected",
   "completed",
 ];
 
 export const LIFECYCLE_STATUS_LABEL: Record<LifecycleStatus, string> = {
   pending: "Pending",
   dispatched: "Dispatched",
+  accepted: "Accepted",
   in_progress: "In progress",
   appt_set: "Appt set",
   needs_follow_up: "Needs follow-up",
   canceled: "Canceled",
+  rejected: "Rejected",
   completed: "Completed",
   closed: "Closed",
 };
@@ -57,7 +63,10 @@ export const LIFECYCLE_STATUS_LABEL: Record<LifecycleStatus, string> = {
  */
 export const LIFECYCLE_SOURCE_LABEL: Record<string, string> = {
   operator_whatsapp: "Operator dispatch",
+  operator_openphone: "Operator dispatch (Quo)",
   tech_whatsapp: "Tech reply",
+  tech_openphone: "Tech reply (Quo)",
+  operator_reject: "Operator reject",
   closing_chat: "Closing chat",
   manual: "Manual",
   ambiguous_attribution: "Ambiguous attribution",

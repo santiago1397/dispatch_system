@@ -71,6 +71,231 @@ class OpenPhoneService:
 
         return incoming
 
+    # === Technician (Quo dispatch chat) routing ===
+
+    async def resolve_technician_for_message(self, message: IncomingMessage):
+        """Return the technician whose Quo chat this message belongs to, or None.
+
+        The tech↔chat relationship is keyed on the technician's phone:
+        - inbound (tech→operator): match the sender ``from_number``.
+        - outbound (operator→tech): match any recipient in ``to_numbers``.
+        """
+        from app.repositories import technician as technician_repo
+
+        direction = (message.direction or "").lower()
+        if direction == "outgoing":
+            for number in message.to_numbers or []:
+                tech = await technician_repo.get_by_phone_e164(self.db, number)
+                if tech is not None:
+                    return tech
+            return None
+        return await technician_repo.get_by_phone_e164(self.db, message.from_number)
+
+    async def handle_tech_chat_message(
+        self,
+        message: IncomingMessage,
+        technician,
+        background_tasks=None,
+    ) -> None:
+        """Route a message that belongs to a technician's Quo chat.
+
+        - Outbound (operator→tech) → operator-dispatch detection (§dispatch).
+        - Inbound that looks like a job (phone + address) → normal
+          classification (the tech is ORIGINATING a new job).
+        - Inbound otherwise → OpenPhone tech-reply parser (status update),
+          run in the background because it makes an LLM call.
+        """
+        from app.services.classification import JobClassificationService, _clean_for_match
+
+        direction = (message.direction or "").lower()
+        if direction == "outgoing":
+            await self._handle_operator_dispatch(message, technician)
+            return
+
+        match_content = _clean_for_match(message.content or "")
+        if JobClassificationService._is_job_message(match_content):
+            logger.info(
+                "OP_TECH_CHAT stage=new_job tech=%s openphone_id=%s",
+                technician.name,
+                message.openphone_id,
+            )
+            svc = JobClassificationService(self.db)
+            await svc.classify_message(message)
+            return
+
+        logger.info(
+            "OP_TECH_CHAT stage=status_reply tech=%s openphone_id=%s",
+            technician.name,
+            message.openphone_id,
+        )
+        from app.services.tech_reply_parser import parse_openphone_tech_reply_in_background
+
+        if background_tasks is not None:
+            background_tasks.add_task(
+                parse_openphone_tech_reply_in_background,
+                incoming_message_id=message.id,
+            )
+        else:
+            await parse_openphone_tech_reply_in_background(incoming_message_id=message.id)
+
+    async def _handle_operator_dispatch(self, message: IncomingMessage, technician) -> None:
+        """Match an operator's outbound message to a pending Job and dispatch it.
+
+        Mirrors ``services/whatsapp.py:_handle_operator_dispatch`` for the
+        OpenPhone channel: parse the address+phone from the body, fuzzy-match
+        a pending Job, and transition it to ``dispatched`` (or raise a
+        ``dispatch_no_match`` alert). Idempotent on redelivered webhooks.
+        """
+        from app.db.models.job_lifecycle_event import LifecycleEventSource
+        from app.repositories import alert as alert_repo
+        from app.repositories import job as job_repo
+        from app.repositories import lifecycle_event_repo
+        from app.services.address_normalizer import normalize_address, normalize_phone
+        from app.services.classification import PHONE_PATTERN
+        from app.services.lifecycle import LifecycleService
+
+        openphone_id = message.openphone_id
+        if openphone_id and await lifecycle_event_repo.exists_for_openphone_id(
+            self.db,
+            source=LifecycleEventSource.OPERATOR_OPENPHONE.value,
+            openphone_id=openphone_id,
+        ):
+            logger.info("OP_DISPATCH_DUP openphone_id=%s", openphone_id)
+            return
+
+        body = (message.content or "").strip()
+        if not body:
+            return
+
+        normalized = normalize_address(body)
+        phone_match = PHONE_PATTERN.search(body)
+        phone_e164 = normalize_phone(phone_match.group(0)) if phone_match else None
+
+        job = await job_repo.find_dispatch_target(
+            self.db,
+            street_number=normalized.street_number,
+            street_name=normalized.street_name,
+            zip_code=normalized.zip_code,
+            customer_phone_e164=phone_e164,
+        )
+        chat_key = f"openphone:{technician.phone_e164}"
+        if job is None:
+            await alert_repo.create_or_get_open(
+                self.db,
+                kind="dispatch_no_match",
+                chat_jid=chat_key,
+                payload={
+                    "openphone_id": openphone_id,
+                    "body_preview": body[:120],
+                    "street_number": normalized.street_number,
+                    "street_name": normalized.street_name,
+                    "zip_code": normalized.zip_code,
+                    "phone_e164": phone_e164,
+                    "technician_id": str(technician.id),
+                },
+            )
+            logger.warning(
+                "OP_DISPATCH_NO_MATCH openphone_id=%s tech=%s", openphone_id, technician.name
+            )
+            return
+
+        try:
+            await LifecycleService(self.db).transition(
+                job=job,
+                to_status="dispatched",
+                source=LifecycleEventSource.OPERATOR_OPENPHONE,
+                payload={
+                    "phone_e164": technician.phone_e164,
+                    "openphone_id": openphone_id,
+                    "technician_id": str(technician.id),
+                },
+            )
+        except Exception:
+            logger.exception(
+                "OP_DISPATCH_TRANSITION_FAILED job_id=%s openphone_id=%s", job.id, openphone_id
+            )
+            return
+        logger.info(
+            "OP_DISPATCH_TRANSITIONED job_id=%s tech=%s openphone_id=%s",
+            job.id,
+            technician.name,
+            openphone_id,
+        )
+
+    # === Operator reject branch ===
+
+    async def maybe_reject_job(self, message: IncomingMessage) -> bool:
+        """Reject the pending job an operator outbound reply declines, if any.
+
+        The OpenPhone twin of ``WhatsappService._maybe_reject_job``. Called
+        for outbound (operator→company) messages on the non-tech default
+        path. Returns ``True`` when a job was transitioned to ``rejected``.
+
+        Flow: for each counterparty the reply was sent to, find the
+        most-recent still-``pending`` job whose inbound job message came
+        from that number, confirm the body is a reject signal (phrase or a
+        re-paste of the job with a note), confirm the reply is within the
+        next two operator outbound messages, and transition the job to the
+        terminal ``rejected`` status via the lifecycle gate.
+        """
+        from app.db.models.job_lifecycle_event import LifecycleEventSource
+        from app.repositories import job as job_repo
+        from app.services import reject_detector
+        from app.services.lifecycle import LifecycleService, LifecycleStatus
+
+        body = (message.content or "").strip()
+        reply_at = message.created_at
+        if not body or reply_at is None:
+            return False
+
+        for counterparty in message.to_numbers or []:
+            candidate = await job_repo.find_reject_candidate_openphone(
+                self.db, counterparty=counterparty, before=reply_at
+            )
+            if candidate is None:
+                continue
+            job, source_body = candidate
+
+            if not reject_detector.is_reject_signal(body, source_body):
+                continue
+
+            outbound_count = await openphone_repo.count_outbound_messages_to(
+                self.db,
+                counterparty=counterparty,
+                after=job.first_message_at,
+                until=reply_at,
+            )
+            if outbound_count > 2:
+                logger.info(
+                    "OP_REJECT_TOO_LATE openphone_id=%s job_id=%s outbound=%d",
+                    message.openphone_id,
+                    job.id,
+                    outbound_count,
+                )
+                continue
+
+            await LifecycleService(self.db).transition(
+                job=job,
+                to_status=LifecycleStatus.REJECTED,
+                source=LifecycleEventSource.OPERATOR_REJECT,
+                payload={
+                    "counterparty": counterparty,
+                    "openphone_id": message.openphone_id,
+                    "body_preview": body[:120],
+                    "operator_msg_index": outbound_count,
+                },
+            )
+            logger.info(
+                "OP_REJECT_APPLIED openphone_id=%s job_id=%s counterparty=%s outbound=%d",
+                message.openphone_id,
+                job.id,
+                counterparty,
+                outbound_count,
+            )
+            return True
+
+        return False
+
     # === Internal CRUD ===
 
     async def get_incoming_message(self, message_id) -> IncomingMessage:

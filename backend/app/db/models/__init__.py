@@ -19,6 +19,7 @@ from app.db.models.job_lifecycle_event import (
     LifecycleEventSource,
 )
 from app.db.models.alert import Alert, AlertKind
+from app.db.models.company_update import CompanyUpdate
 from app.db.models.daily_stats import DailyStatsSnapshot, StatsScope
 
 __all__ = [
@@ -44,6 +45,7 @@ __all__ = [
     "LifecycleEventSource",
     "Alert",
     "AlertKind",
+    "CompanyUpdate",
     "DailyStatsSnapshot",
     "StatsScope",
 ]

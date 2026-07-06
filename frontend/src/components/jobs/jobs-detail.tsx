@@ -2,7 +2,8 @@
 
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Inbox, Link2, RefreshCw } from "lucide-react";
+import { Copy, Inbox, Link2, RefreshCw } from "lucide-react";
+import type { CompanyUpdate } from "@/types";
 import { Button } from "@/components/ui";
 import { Skeleton } from "@/components/ui";
 import { formatDateTime } from "@/lib/utils";
@@ -18,6 +19,17 @@ import { StatusBadge } from "./status-badge";
 import { LifecycleStatusBadge } from "./lifecycle-status-badge";
 import { LifecycleDropdown } from "./lifecycle-dropdown";
 import { LifecycleTimeline } from "./lifecycle-timeline";
+
+/** Friendly labels for the tech-reply reason codes (canceled / follow-up). */
+const REASON_LABEL: Record<string, string> = {
+  refused: "Customer refused",
+  dns: "Did not need service",
+  solved: "Customer solved it",
+  no_service: "No service needed",
+  priceshopping: "Price shopping",
+  will_cb: "Customer will call back",
+  callback: "Wants a callback",
+};
 
 /** One key-value row in a grouped section. */
 function Field({ label, value }: { label: string; value: string | null | undefined }) {
@@ -88,6 +100,7 @@ export function JobsDetail() {
   }
 
   const hasVehicle = Boolean(job.car_make || job.car_model || job.car_year);
+  const hasLifecycleDetails = Boolean(job.appt_at || job.follow_up_at || job.reason);
   const isClosingFlow =
     job.classification_status === "closed" ||
     job.classification_status === "closing_unmatched";
@@ -215,6 +228,11 @@ export function JobsDetail() {
 
       {/* Scrollable body */}
       <div className="flex-1 overflow-auto px-4 py-4 sm:px-6">
+        {/* Send to company — the update to relay, when one is pending. */}
+        {job.pending_company_update ? (
+          <CompanyRelayCard relay={job.pending_company_update} />
+        ) : null}
+
         {/* Job */}
         <Section title="Job">
           <Field label="Address" value={job.address} />
@@ -233,6 +251,26 @@ export function JobsDetail() {
             <Field label="Make" value={job.car_make} />
             <Field label="Model" value={job.car_model} />
             <Field label="Year" value={job.car_year} />
+          </Section>
+        ) : null}
+
+        {/* Follow-up & appointment — the tech-update timings the
+            operator acts on. Appointment date/time (appt_set), the
+            callback reminder time (needs_follow_up), and the reason. */}
+        {hasLifecycleDetails ? (
+          <Section title="Follow-up & appointment">
+            <Field
+              label="Appointment"
+              value={job.appt_at ? formatDateTime(job.appt_at) : null}
+            />
+            <Field
+              label="Call customer back"
+              value={job.follow_up_at ? formatDateTime(job.follow_up_at) : null}
+            />
+            <Field
+              label="Reason"
+              value={job.reason ? (REASON_LABEL[job.reason] ?? job.reason) : null}
+            />
           </Section>
         ) : null}
 
@@ -305,6 +343,46 @@ export function JobsDetail() {
         </Section>
       </div>
     </div>
+  );
+}
+
+/**
+ * "Send to company" card — the composed update (original job + the tech
+ * update) the operator forwards to the company. The system never sends it;
+ * this is a copy-and-paste helper. A reminder alert fires if it isn't
+ * relayed within the SLA (see the alert engine's company_update_unsent).
+ */
+function CompanyRelayCard({ relay }: { relay: CompanyUpdate }) {
+  const [copied, setCopied] = useState(false);
+  const onCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(relay.message_text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard blocked (insecure context / permissions) — no-op.
+    }
+  };
+  const to = relay.company_phone ?? relay.company_chat_jid ?? "the company";
+  const channel = relay.channel === "openphone" ? "OpenPhone" : "WhatsApp";
+  return (
+    <section className="mb-5 rounded-md border border-amber-300 bg-amber-50 p-3 dark:border-amber-800/60 dark:bg-amber-900/20">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h3 className="text-xs font-semibold tracking-wide text-amber-800 uppercase dark:text-amber-200">
+          Send to company
+        </h3>
+        <Button size="sm" variant="outline" onClick={onCopy}>
+          <Copy className="h-3.5 w-3.5" />
+          {copied ? "Copied" : "Copy"}
+        </Button>
+      </div>
+      <p className="mb-2 text-xs text-amber-800/80 dark:text-amber-200/80">
+        Forward this update to {to} in {channel}. The system won&apos;t send it for you.
+      </p>
+      <div className="bg-background max-h-48 overflow-auto rounded border p-2 text-sm whitespace-pre-wrap">
+        {relay.message_text}
+      </div>
+    </section>
   );
 }
 

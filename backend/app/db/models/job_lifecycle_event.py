@@ -29,9 +29,14 @@ class LifecycleEventSource(StrEnum):
 
     OPERATOR_WHATSAPP = "operator_whatsapp"
     TECH_WHATSAPP = "tech_whatsapp"
+    OPERATOR_OPENPHONE = "operator_openphone"
+    TECH_OPENPHONE = "tech_openphone"
     CLOSING_CHAT = "closing_chat"
     MANUAL = "manual"
     AMBIGUOUS_ATTRIBUTION = "ambiguous_attribution"
+    # Operator declined the job in the source chat (reject-phrase or a
+    # re-paste of the job with a short note). See ``services/reject_detector.py``.
+    OPERATOR_REJECT = "operator_reject"
 
 
 class JobLifecycleEvent(Base, TimestampMixin):

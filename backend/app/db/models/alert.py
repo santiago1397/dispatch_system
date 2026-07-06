@@ -27,9 +27,15 @@ if TYPE_CHECKING:
 
 
 class AlertKind(StrEnum):
+    # Pending too long — neither dispatched nor rejected within the SLA.
+    UNDISPATCHED = "undispatched"
     STUCK_DISPATCHED = "stuck_dispatched"
     STUCK_IN_PROGRESS = "stuck_in_progress"
     APPT_TIME_PASSED = "appt_time_passed"
+    # Friendly reminder — a needs_follow_up job's callback time has arrived.
+    FOLLOW_UP_DUE = "follow_up_due"
+    # The operator hasn't relayed a tech update to the source company yet.
+    COMPANY_UPDATE_UNSENT = "company_update_unsent"
     CLOSING_MISSING = "closing_missing"
     UNATTRIBUTED_REPLY = "unattributed_reply"
     DISPATCH_NO_MATCH = "dispatch_no_match"

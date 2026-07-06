@@ -47,12 +47,22 @@ class LifecycleStatus(StrEnum):
 
     PENDING = "pending"
     DISPATCHED = "dispatched"
+    # Non-terminal. Set when the assigned technician confirms the dispatch
+    # ("ok"/"k"/…) — distinct from ``dispatched`` (sent, awaiting reply) and
+    # ``in_progress`` (tech en route / working). See ``tech_reply_parser``.
+    ACCEPTED = "accepted"
     IN_PROGRESS = "in_progress"
     APPT_SET = "appt_set"
     NEEDS_FOLLOW_UP = "needs_follow_up"
     CANCELED = "canceled"
     COMPLETED = "completed"
     CLOSED = "closed"
+    # Terminal state reached when the operator declines a job in the
+    # source chat (e.g. "pass", "have it", "<zip> pass", or a re-paste of
+    # the job with a short note) within the next two operator messages.
+    # Rejected jobs are never dispatched, so the alert engine must not
+    # flag them as stuck/unclosed — see ``services/reject_detector.py``.
+    REJECTED = "rejected"
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +79,11 @@ class LifecycleStatus(StrEnum):
 # terminal ``closed`` state, which may ONLY come from ``closing_chat``
 # — the closing pipeline is the only source of truth for "the totals
 # arrived and the job is paid".
-_TERMINAL_STATUSES = {LifecycleStatus.CLOSED, LifecycleStatus.CANCELED}
+_TERMINAL_STATUSES = {
+    LifecycleStatus.CLOSED,
+    LifecycleStatus.CANCELED,
+    LifecycleStatus.REJECTED,
+}
 
 
 def _validate_transition(
@@ -173,6 +187,23 @@ class LifecycleService:
             source=source,
         )
 
+        # Denormalize tech-update timings onto the Job so the /jobs views
+        # can show them without a per-row event query. Set on the relevant
+        # transition; a parseable value overwrites, free-text is ignored.
+        from app.services.timeparse import parse_iso8601
+
+        if to_status == LifecycleStatus.APPT_SET:
+            appt_dt = parse_iso8601(payload.get("appt_iso"))
+            if appt_dt is not None:
+                job.appt_at = appt_dt
+        if to_status == LifecycleStatus.NEEDS_FOLLOW_UP:
+            follow_up_dt = parse_iso8601(payload.get("follow_up_at"))
+            if follow_up_dt is not None:
+                job.follow_up_at = follow_up_dt
+        reason = payload.get("reason")
+        if reason:
+            job.last_tech_reason = str(reason)[:30]
+
         now = datetime.now(UTC)
         event = await lifecycle_event_repo.create_event(
             self.db,
@@ -191,6 +222,33 @@ class LifecycleService:
             when=now,
         )
 
+        # A job leaving ``pending`` (dispatched, rejected, canceled, …) has
+        # been acted on, so clear any open ``undispatched`` alert. Handled
+        # separately from the terminal-state cleanup below because
+        # ``dispatched`` is non-terminal.
+        if (
+            from_status_str == LifecycleStatus.PENDING.value
+            and to_status != LifecycleStatus.PENDING
+        ):
+            await alert_repo.auto_resolve_for_job(
+                self.db,
+                job_id=job.id,
+                kinds=[alert_repo.AlertKind.UNDISPATCHED.value],
+            )
+
+        # A job leaving ``needs_follow_up`` means the operator called the
+        # customer back (or moved it on), so clear the friendly
+        # ``follow_up_due`` reminder. Non-terminal, so handled here.
+        if (
+            from_status_str == LifecycleStatus.NEEDS_FOLLOW_UP.value
+            and to_status != LifecycleStatus.NEEDS_FOLLOW_UP
+        ):
+            await alert_repo.auto_resolve_for_job(
+                self.db,
+                job_id=job.id,
+                kinds=[alert_repo.AlertKind.FOLLOW_UP_DUE.value],
+            )
+
         # Auto-resolve any stuck alerts once the job leaves the offending
         # status. This keeps the dashboard clean without requiring the
         # operator to manually resolve alerts that have self-cleared.
@@ -202,6 +260,7 @@ class LifecycleService:
                     "stuck_dispatched",
                     "stuck_in_progress",
                     "appt_time_passed",
+                    "follow_up_due",
                     "closing_missing",
                 ],
             )

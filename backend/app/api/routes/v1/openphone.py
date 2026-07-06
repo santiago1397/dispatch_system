@@ -123,15 +123,70 @@ async def receive_openphone_webhook(
                 await db.rollback()
                 return
 
-            # Run classification pipeline in a separate DB session
-            if message.content and message.event_type == "message.received":
+            # Technician (Quo dispatch chat) routing — runs BEFORE the
+            # generic classify path so an inbound job message from a tech
+            # is classified via the same pipeline (decided upstream), and
+            # an outbound operator dispatch goes to ``dispatched`` instead
+            # of being treated as chat noise.
+            try:
+                tech = await service.resolve_technician_for_message(message)
+            except Exception:
+                logger.exception(
+                    "Failed to resolve technician for OpenPhone message %s", message.id
+                )
+                tech = None
+
+            if tech is not None:
+                try:
+                    await service.handle_tech_chat_message(message, tech)
+                    await db.commit()
+                except Exception:
+                    logger.exception(
+                        "Failed to handle OpenPhone tech-chat message %s", message.id
+                    )
+                    await db.rollback()
+                return
+
+            # Operator outbound reply on a non-tech conversation. We never
+            # classify outbound as a new job, but it may be a job REJECTION
+            # ("pass"/"have it"/"<zip> pass"/re-paste with a note) aimed at
+            # the company that texted the job in — decline the matching
+            # pending Job so the alert engine never flags it.
+            if (message.direction or "").lower() == "outgoing":
+                try:
+                    from app.repositories import openphone as openphone_repo
+
+                    async with get_db_context() as reject_db:
+                        fresh = await openphone_repo.get_incoming_message(reject_db, message.id)
+                        if fresh is not None:
+                            await OpenPhoneService(reject_db).maybe_reject_job(fresh)
+                            await reject_db.commit()
+                except Exception:
+                    logger.exception("Failed reject-detection for OpenPhone message %s", message.id)
+                return
+
+            # Default path: inbound from a non-tech sender goes through the
+            # normal classification pipeline. Outbound to a non-tech number
+            # is otherwise ignored (the operator types customer replies in
+            # the OpenPhone mobile app — we never send outbound messages).
+            if (
+                message.content
+                and (message.event_type or "").startswith("message.received")
+            ):
                 try:
                     from app.services.classification import JobClassificationService
 
                     async with get_db_context() as classify_db:
-                        classification_svc = JobClassificationService(classify_db)
-                        await classification_svc.classify_message(message)
-                        await classify_db.commit()
+                        # Re-load in the fresh session; `message` was
+                        # committed in the parent session so classify_db
+                        # sees the row.
+                        from app.repositories import openphone as openphone_repo
+
+                        fresh = await openphone_repo.get_incoming_message(classify_db, message.id)
+                        if fresh is not None:
+                            classification_svc = JobClassificationService(classify_db)
+                            await classification_svc.classify_message(fresh)
+                            await classify_db.commit()
                 except Exception:
                     logger.exception("Failed to classify message %s", message.id)
 

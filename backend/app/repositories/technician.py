@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.technician import Technician
+from app.services.address_normalizer import normalize_phone
 
 
 async def list_active(db: AsyncSession) -> list[Technician]:
@@ -43,6 +44,23 @@ async def get_by_chat_jid(db: AsyncSession, chat_jid: str) -> Technician | None:
     return result.scalar_one_or_none()
 
 
+async def get_by_phone_e164(db: AsyncSession, phone: str | None) -> Technician | None:
+    """Get a technician by phone, matched on the canonical 10-digit form.
+
+    Normalizes the input the same way ``phone_e164`` is stored (via
+    ``normalize_phone``) so an OpenPhone webhook ``from_number`` / ``to``
+    value in any format resolves to the technician's dispatch chat.
+    Returns ``None`` when the input can't be normalized to 10 digits or
+    no technician owns that number.
+    """
+    normalized = normalize_phone(phone)
+    if normalized is None:
+        return None
+    query = select(Technician).where(Technician.phone_e164 == normalized)
+    result = await db.execute(query)
+    return result.scalar_one_or_none()
+
+
 async def create(
     db: AsyncSession,
     *,
@@ -55,7 +73,9 @@ async def create(
     """Insert a new Technician."""
     technician = Technician(
         name=name,
-        phone_e164=phone_e164,
+        # Canonicalize to the 10-digit form used as the OpenPhone match key.
+        # Keep the raw value if it can't be normalized so no input is lost.
+        phone_e164=(normalize_phone(phone_e164) or phone_e164) if phone_e164 else None,
         whatsapp_chat_jid=whatsapp_chat_jid,
         is_active=is_active,
         notes=notes,
@@ -85,7 +105,8 @@ async def update(
     if name is not None:
         technician.name = name
     if phone_e164 is not None:
-        technician.phone_e164 = phone_e164
+        # Canonicalize to the 10-digit match key; empty string clears it.
+        technician.phone_e164 = (normalize_phone(phone_e164) or phone_e164) or None
     if whatsapp_chat_jid is not None:
         technician.whatsapp_chat_jid = whatsapp_chat_jid or None
     if is_active is not None:

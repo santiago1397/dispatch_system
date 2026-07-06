@@ -19,7 +19,7 @@ import time
 
 import pytest
 
-from app.core import webhook
+from app.core.config import settings
 from app.core.webhook import (
     LEGACY_SIGNATURE_HEADER,
     verify_openphone_signature,
@@ -42,7 +42,7 @@ def _sign_legacy(secret: str, body: bytes, ts_ms: int) -> str:
 
 
 def test_legacy_accepts_valid_signature(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(webhook.settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
     body = b'{"event":"message.received","data":{"id":"M123"}}'
     secret = "the-raw-legacy-secret"
     sig = _sign_legacy(secret, body, int(time.time() * 1000))
@@ -51,7 +51,7 @@ def test_legacy_accepts_valid_signature(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_legacy_rejects_tampered_body(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(webhook.settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
     body = b'{"event":"message.received","data":{"id":"M123"}}'
     secret = "the-raw-legacy-secret"
     sig = _sign_legacy(secret, body, int(time.time() * 1000))
@@ -61,7 +61,7 @@ def test_legacy_rejects_tampered_body(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_legacy_rejects_wrong_secret(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(webhook.settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
     body = b'{"event":"message.received"}'
     sig = _sign_legacy("real-secret", body, int(time.time() * 1000))
 
@@ -69,7 +69,7 @@ def test_legacy_rejects_wrong_secret(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_legacy_rejects_stale_timestamp(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(webhook.settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
     body = b"{}"
     secret = "s"
     stale_ms = int(time.time() * 1000) - (10 * 60 * 1000)  # 10 minutes ago
@@ -79,7 +79,7 @@ def test_legacy_rejects_stale_timestamp(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_legacy_rejects_malformed_header(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(webhook.settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
     assert verify_openphone_signature(b"{}", "not-a-real-sig", "s") is False
     assert verify_openphone_signature(b"{}", "hmac;2;1;aaaa", "s") is False
     assert verify_openphone_signature(b"{}", "hmac;1;notanumber;aaaa", "s") is False
@@ -87,13 +87,37 @@ def test_legacy_rejects_malformed_header(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_empty_secret_in_production_rejects(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(webhook.settings, "ENVIRONMENT", "production")
-    assert verify_openphone_signature(b"{}", "hmac;1;1;AAAA", "") is False
+    # The empty-secret env gate lives in the dispatcher, not the legacy leaf
+    # verifier, so exercise verify_webhook_signature (the production path).
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    assert (
+        verify_webhook_signature(
+            b"{}",
+            openphone_signature="hmac;1;1;AAAA",
+            webhook_signature=None,
+            webhook_timestamp=None,
+            webhook_id=None,
+            secret="",
+        )
+        is False
+    )
 
 
 def test_empty_secret_in_local_skips(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(webhook.settings, "ENVIRONMENT", "local")
-    assert verify_openphone_signature(b"{}", "hmac;1;1;AAAA", "") is True
+    # Same dispatcher gate: in local, an empty secret skips verification
+    # entirely (returns True) regardless of the signature contents.
+    monkeypatch.setattr(settings, "ENVIRONMENT", "local")
+    assert (
+        verify_webhook_signature(
+            b"{}",
+            openphone_signature="hmac;1;1;AAAA",
+            webhook_signature=None,
+            webhook_timestamp=None,
+            webhook_id=None,
+            secret="",
+        )
+        is True
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +136,7 @@ def _sign_beta(secret_bytes: bytes, body: bytes, ts_s: int, wid: str) -> str:
 def test_beta_accepts_valid_signature_with_whsec_prefix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(webhook.settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
     body = b'{"event":"message.received"}'
     raw_secret = b"super-secret-bytes-for-hmac-key"
     secret_in_env = "whsec_" + base64.b64encode(raw_secret).decode("ascii")
@@ -132,7 +156,7 @@ def test_beta_accepts_valid_signature_with_whsec_prefix(
 def test_beta_accepts_multiple_v1_signatures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(webhook.settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
     body = b"{}"
     raw_secret = b"another-secret"
     secret_in_env = "whsec_" + base64.b64encode(raw_secret).decode("ascii")
@@ -152,7 +176,7 @@ def test_beta_accepts_multiple_v1_signatures(
 def test_beta_rejects_when_no_v1_entry_matches(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(webhook.settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
     body = b"{}"
     raw_secret = b"secret"
     secret_in_env = "whsec_" + base64.b64encode(raw_secret).decode("ascii")
@@ -168,7 +192,7 @@ def test_beta_rejects_when_no_v1_entry_matches(
 
 
 def test_beta_rejects_stale_timestamp(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(webhook.settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
     body = b"{}"
     raw_secret = b"secret"
     secret_in_env = "whsec_" + base64.b64encode(raw_secret).decode("ascii")
@@ -185,7 +209,7 @@ def test_beta_rejects_stale_timestamp(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_beta_rejects_when_signature_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(webhook.settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
     headers = {
         "webhook-timestamp": str(int(time.time())),
         "webhook-id": "evt_3",
@@ -202,7 +226,7 @@ def test_dispatcher_picks_beta_when_both_headers_present(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """When both schemes' headers arrive, beta wins (more specific)."""
-    monkeypatch.setattr(webhook.settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
     body = b'{"event":"message.received"}'
 
     # Legacy signed with a different secret (would fail legacy check).
@@ -227,7 +251,7 @@ def test_dispatcher_picks_beta_when_both_headers_present(
 
 
 def test_dispatcher_falls_back_to_legacy(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(webhook.settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
     body = b"{}"
     legacy_secret = "still-the-raw-secret"
     legacy_sig = _sign_legacy(legacy_secret, body, int(time.time() * 1000))
@@ -239,7 +263,7 @@ def test_dispatcher_falls_back_to_legacy(monkeypatch: pytest.MonkeyPatch) -> Non
 def test_dispatcher_rejects_when_no_signature_headers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(webhook.settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
     assert verify_webhook_from_headers(b"{}", {}, "some-secret") is False
 
 
@@ -257,7 +281,7 @@ def test_real_captured_log_line_with_both_legacy_and_beta(
     rejects when the wrong secret is used — and accepts when we feed it
     the right one (synthesized here).
     """
-    monkeypatch.setattr(webhook.settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
     body = b'{"event":"message.received","data":{}}' + b" " * 700  # ~729 bytes
     real_secret = "the-real-legacy-secret"
     wrong_secret = "definitely-not-the-real-one"

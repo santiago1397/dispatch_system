@@ -72,8 +72,13 @@ class TestTransitionHappyPath:
         assert event_id == event.id
         lifecycle_event_repo.create_event.assert_called_once()
         job_repo.set_lifecycle_status.assert_called_once()
-        # No alert auto-resolve on a non-terminal transition.
-        alert_repo.auto_resolve_for_job.assert_not_called()
+        # Leaving 'pending' clears the undispatched SLA alert — but not the
+        # terminal stuck-alert cleanup, which only runs on close/cancel.
+        alert_repo.auto_resolve_for_job.assert_called_once_with(
+            db,
+            job_id=job.id,
+            kinds=[alert_repo.AlertKind.UNDISPATCHED.value],
+        )
 
     @pytest.mark.anyio
     async def test_in_progress_advances_state(self):

@@ -116,6 +116,34 @@ async def latest_for_job(
     return result.scalar_one_or_none()
 
 
+async def exists_for_openphone_id(
+    db: AsyncSession,
+    *,
+    source: str,
+    openphone_id: str,
+) -> bool:
+    """True if an event of ``source`` already recorded this OpenPhone message.
+
+    OpenPhone can redeliver the same webhook (e.g. ``message.delivered``
+    firing more than once). Dispatch/reply handlers stamp
+    ``payload.openphone_id`` on the event they create; this guard lets
+    them no-op on a redelivery instead of appending a duplicate
+    transition.
+    """
+    if not openphone_id:
+        return False
+    query = (
+        select(JobLifecycleEvent.id)
+        .where(
+            JobLifecycleEvent.source == source,
+            JobLifecycleEvent.payload["openphone_id"].astext == openphone_id,
+        )
+        .limit(1)
+    )
+    result = await db.execute(query)
+    return result.scalar_one_or_none() is not None
+
+
 async def latest_with_to_status(
     db: AsyncSession,
     job_id: uuid.UUID,

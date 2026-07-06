@@ -1,5 +1,6 @@
 """Repository for OpenPhone incoming message persistence."""
 
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -86,5 +87,63 @@ async def list_incoming_messages(
 async def count_incoming_messages(db: AsyncSession) -> int:
     """Count total incoming messages."""
     query = select(func.count()).select_from(IncomingMessage)
+    result = await db.execute(query)
+    return result.scalar_one()
+
+
+async def count_inbound_messages_from(
+    db: AsyncSession,
+    *,
+    from_number: str,
+    after: datetime,
+    until: datetime,
+) -> int:
+    """Count inbound OpenPhone messages from ``from_number`` in ``(after, until]``.
+
+    Enforces the tech-side "next two messages" window for accept/reject on
+    the Quo channel (no quote affordance exists). ``after`` is the dispatch
+    event time (exclusive), ``until`` the reply's ``created_at`` (inclusive).
+    """
+    query = (
+        select(func.count())
+        .select_from(IncomingMessage)
+        .where(
+            IncomingMessage.source == MessageSource.OPENPHONE.value,
+            IncomingMessage.direction == "incoming",
+            IncomingMessage.from_number == from_number,
+            IncomingMessage.created_at > after,
+            IncomingMessage.created_at <= until,
+        )
+    )
+    result = await db.execute(query)
+    return result.scalar_one()
+
+
+async def count_outbound_messages_to(
+    db: AsyncSession,
+    *,
+    counterparty: str,
+    after: datetime,
+    until: datetime,
+) -> int:
+    """Count operator outbound OpenPhone messages to ``counterparty``.
+
+    The OpenPhone equivalent of the WhatsApp "next two operator messages"
+    window: how many outbound (operator→company) messages went to this
+    counterparty in ``(after, until]``. ``after`` is the job's
+    ``first_message_at`` (exclusive), ``until`` the reply's ``created_at``
+    (inclusive). ``to_numbers`` is a JSONB array, matched by containment.
+    """
+    query = (
+        select(func.count())
+        .select_from(IncomingMessage)
+        .where(
+            IncomingMessage.source == MessageSource.OPENPHONE.value,
+            IncomingMessage.direction == "outgoing",
+            IncomingMessage.to_numbers.contains([counterparty]),
+            IncomingMessage.created_at > after,
+            IncomingMessage.created_at <= until,
+        )
+    )
     result = await db.execute(query)
     return result.scalar_one()

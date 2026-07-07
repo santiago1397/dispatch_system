@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 
 from app.db.models.dispatch_job import DispatchJob
 from app.db.models.job import Job
+from app.db.models.openphone import IncomingMessage
 
 
 async def create_job(
@@ -433,12 +434,9 @@ async def get_alert_job_summaries(
     for job in jobs:
         origin = origin_by_job.get(job.id)
         message = origin.incoming_message if origin is not None else None
-        address = (
-            " ".join(
-                p for p in (job.address_street_number, job.address_street_name) if p
-            ).strip()
-            or (origin.address if origin is not None else None)
-        )
+        address = " ".join(
+            p for p in (job.address_street_number, job.address_street_name) if p
+        ).strip() or (origin.address if origin is not None else None)
         preview = None
         if message is not None and message.content:
             preview = message.content[:200]
@@ -456,3 +454,26 @@ async def get_alert_job_summaries(
             "message_source": message.source if message is not None else None,
         }
     return summaries
+
+
+async def search_job_ids_by_message(db: AsyncSession, search: str) -> list[uuid.UUID]:
+    """Find parent Job ids whose raw incoming message text matches ``search``.
+
+    Used by the alerts search bar — the operator recalls a phrase from the
+    job message ("no hot water", a street name) and needs the alert(s) it
+    triggered. Matches any ``DispatchJob`` under the job whose
+    ``IncomingMessage.content`` contains ``search`` (case-insensitive), not
+    just the originating one, since a follow-up message may carry the term.
+    """
+    escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    query = (
+        select(DispatchJob.job_id)
+        .join(IncomingMessage, DispatchJob.incoming_message_id == IncomingMessage.id)
+        .where(
+            DispatchJob.job_id.is_not(None),
+            IncomingMessage.content.ilike(f"%{escaped}%", escape="\\"),
+        )
+        .distinct()
+    )
+    result = await db.execute(query)
+    return [row[0] for row in result.all()]

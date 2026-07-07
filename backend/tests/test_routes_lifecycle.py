@@ -163,6 +163,7 @@ class TestAlertsList:
                 _user=_user_with_role(),
                 resolved=False,
                 kinds=None,
+                search=None,
                 limit=100,
                 offset=0,
             )
@@ -170,6 +171,74 @@ class TestAlertsList:
         lo.assert_called_once()
         co.assert_called_once()
         assert result.total == 0
+
+    @pytest.mark.anyio
+    async def test_search_with_no_matching_jobs_short_circuits(self):
+        """No job's raw message matches ``search`` — skip the alert query
+        entirely and return an empty list rather than filtering on an
+        empty ``job_ids`` set."""
+        from app.api.routes.v1.alerts import list_alerts
+
+        db = AsyncMock()
+        with (
+            patch(
+                "app.repositories.job.search_job_ids_by_message",
+                new=AsyncMock(return_value=[]),
+            ) as search,
+            patch(
+                "app.repositories.alert.list_open",
+                new=AsyncMock(),
+            ) as lo,
+        ):
+            result = await list_alerts(
+                db=db,
+                _user=_user_with_role(),
+                resolved=False,
+                kinds=None,
+                search="no hot water",
+                limit=100,
+                offset=0,
+            )
+
+        search.assert_called_once_with(db, "no hot water")
+        lo.assert_not_called()
+        assert result.items == []
+        assert result.total == 0
+
+    @pytest.mark.anyio
+    async def test_search_filters_by_matching_job_ids(self):
+        """A search term with matching jobs narrows ``list_open``/``count_open``
+        to those job ids."""
+        from app.api.routes.v1.alerts import list_alerts
+
+        db = AsyncMock()
+        job_id = uuid4()
+        with (
+            patch(
+                "app.repositories.job.search_job_ids_by_message",
+                new=AsyncMock(return_value=[job_id]),
+            ),
+            patch(
+                "app.repositories.alert.list_open",
+                new=AsyncMock(return_value=[]),
+            ) as lo,
+            patch(
+                "app.repositories.alert.count_open",
+                new=AsyncMock(return_value=0),
+            ) as co,
+        ):
+            await list_alerts(
+                db=db,
+                _user=_user_with_role(),
+                resolved=False,
+                kinds=None,
+                search="leak",
+                limit=100,
+                offset=0,
+            )
+
+        lo.assert_called_once_with(db, kinds=None, job_ids=[job_id], limit=100, offset=0)
+        co.assert_called_once_with(db, kinds=None, job_ids=[job_id])
 
 
 class TestAlertsResolve:

@@ -77,15 +77,22 @@ async def list_open(
     db: AsyncSession,
     *,
     kinds: list[str] | None = None,
+    job_ids: list[uuid.UUID] | None = None,
     limit: int = 200,
     offset: int = 0,
 ) -> list[Alert]:
     """List unresolved alerts. The ``(kind, resolved_at)`` index makes
     this a single index scan even when filtering by ``kinds``.
+
+    ``job_ids``, when given, restricts to alerts bound to one of those
+    parent Jobs — used by the alerts search bar (matches resolved via
+    ``job_repo.search_job_ids_by_message``).
     """
     query = select(Alert).where(Alert.resolved_at.is_(None))
     if kinds is not None:
         query = query.where(Alert.kind.in_(kinds))
+    if job_ids is not None:
+        query = query.where(Alert.job_id.in_(job_ids))
     query = query.order_by(Alert.detected_at.desc()).offset(offset).limit(limit)
     result = await db.execute(query)
     return list(result.scalars().all())
@@ -97,11 +104,14 @@ async def list_recent(
     limit: int = 200,
     offset: int = 0,
     include_resolved: bool = True,
+    job_ids: list[uuid.UUID] | None = None,
 ) -> list[Alert]:
     """List alerts newest-first, optionally including resolved ones."""
     query = select(Alert)
     if not include_resolved:
         query = query.where(Alert.resolved_at.is_(None))
+    if job_ids is not None:
+        query = query.where(Alert.job_id.in_(job_ids))
     query = query.order_by(Alert.detected_at.desc()).offset(offset).limit(limit)
     result = await db.execute(query)
     return list(result.scalars().all())
@@ -116,11 +126,14 @@ async def count_open(
     db: AsyncSession,
     *,
     kinds: list[str] | None = None,
+    job_ids: list[uuid.UUID] | None = None,
 ) -> int:
     """Count unresolved alerts (for sidebar badge)."""
     query = select(func.count()).select_from(Alert).where(Alert.resolved_at.is_(None))
     if kinds is not None:
         query = query.where(Alert.kind.in_(kinds))
+    if job_ids is not None:
+        query = query.where(Alert.job_id.in_(job_ids))
     result = await db.execute(query)
     return result.scalar_one()
 

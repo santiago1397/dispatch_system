@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Check, ExternalLink, X } from "lucide-react";
-import { Button, Skeleton } from "@/components/ui";
+import { Check, ExternalLink, Search, X } from "lucide-react";
+import { Button, Input, Skeleton } from "@/components/ui";
 import { useAlerts, useResolveAlert } from "@/hooks";
 import { formatDateTime } from "@/lib/utils";
 import { describeAlert } from "@/lib/alert-reason";
@@ -12,8 +12,18 @@ import type { Alert } from "@/types";
 
 export default function AlertsPage() {
   const [includeResolved, setIncludeResolved] = useState(false);
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+
+  // Debounce the search box so we don't re-query on every keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(searchInput.trim()), 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
   const { data, isLoading, isError, refetch } = useAlerts({
     resolved: includeResolved,
+    search: search || undefined,
   });
   const rows = useMemo(() => data?.items ?? [], [data]);
 
@@ -21,24 +31,35 @@ export default function AlertsPage() {
 
   return (
     <div className="bg-background flex h-full flex-col overflow-hidden rounded-lg border">
-      <div className="flex items-start justify-between gap-2 border-b px-4 py-3 sm:px-6">
-        <div>
-          <h1 className="text-sm font-semibold tracking-wide uppercase">
-            Alerts
-          </h1>
-          <p className="text-muted-foreground mt-1 text-xs">
-            Pipeline-health issues the alert engine has surfaced. Resolve
-            once the underlying condition has been handled.
-          </p>
+      <div className="flex flex-col gap-3 border-b px-4 py-3 sm:px-6">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <h1 className="text-sm font-semibold tracking-wide uppercase">
+              Alerts
+            </h1>
+            <p className="text-muted-foreground mt-1 text-xs">
+              Pipeline-health issues the alert engine has surfaced. Resolve
+              once the underlying condition has been handled.
+            </p>
+          </div>
+          <label className="text-muted-foreground flex items-center gap-1 text-xs whitespace-nowrap">
+            <input
+              type="checkbox"
+              checked={includeResolved}
+              onChange={(e) => setIncludeResolved(e.target.checked)}
+            />
+            Show resolved
+          </label>
         </div>
-        <label className="text-muted-foreground flex items-center gap-1 text-xs">
-          <input
-            type="checkbox"
-            checked={includeResolved}
-            onChange={(e) => setIncludeResolved(e.target.checked)}
+        <div className="relative max-w-sm">
+          <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2" />
+          <Input
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="Search by job message…"
+            className="h-8 pl-8 text-xs"
           />
-          Show resolved
-        </label>
+        </div>
       </div>
 
       <div className="flex-1 overflow-auto">
@@ -57,7 +78,9 @@ export default function AlertsPage() {
           </div>
         ) : rows.length === 0 ? (
           <p className="text-muted-foreground p-8 text-center text-xs">
-            No {includeResolved ? "" : "open "}alerts.
+            {search
+              ? "No alerts match that search."
+              : `No ${includeResolved ? "" : "open "}alerts.`}
           </p>
         ) : (
           <ul className="divide-y">

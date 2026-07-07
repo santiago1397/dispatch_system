@@ -5,7 +5,8 @@ import { backendFetch, BackendApiError } from "@/lib/server-api";
  * GET /api/alerts
  *
  * Lists pipeline alerts (default: open only). The backend accepts
- * ``resolved=true`` and ``kinds=foo&kinds=bar`` (repeat the param).
+ * ``resolved=true``, ``kinds=foo&kinds=bar`` (repeat the param), and
+ * ``search=text`` (matches against the related job's raw message).
  */
 export async function GET(request: NextRequest) {
   try {
@@ -21,7 +22,7 @@ export async function GET(request: NextRequest) {
     for (const v of sp.getAll("kinds")) {
       params.append("kinds", v);
     }
-    for (const key of ["limit", "offset"]) {
+    for (const key of ["search", "limit", "offset"]) {
       const v = sp.get(key);
       if (v) params.set(key, v);
     }

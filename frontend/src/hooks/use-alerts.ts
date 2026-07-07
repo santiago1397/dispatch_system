@@ -8,6 +8,8 @@ import type { Alert, AlertKind, AlertList } from "@/types";
 export interface AlertFilters {
   resolved?: boolean;
   kinds?: AlertKind[];
+  /** Substring match against the related job's raw incoming message. */
+  search?: string;
 }
 
 /**
@@ -29,6 +31,7 @@ export function useAlerts(filters: AlertFilters = {}) {
       if (filters.kinds) {
         for (const k of filters.kinds) sp.append("kinds", k);
       }
+      if (filters.search) sp.set("search", filters.search);
       return apiClient.get<AlertList>(API_ROUTES.ALERTS, { params: sp });
     },
     refetchOnWindowFocus: true,

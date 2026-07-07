@@ -65,6 +65,12 @@ async def list_alerts(
         description="Filter by alert kind. Repeat the param to allow-list "
         "multiple kinds (e.g. ``?kinds=stuck_dispatched&kinds=closing_missing``).",
     ),
+    search: str | None = Query(
+        default=None,
+        min_length=1,
+        description="Filter to alerts whose related job's raw incoming "
+        "message contains this text (case-insensitive substring).",
+    ),
     limit: int = Query(default=200, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ):
@@ -74,12 +80,22 @@ async def list_alerts(
     what the dashboard shows. The ``include_resolved`` variant is
     available for the audit-trail view.
     """
+    job_ids: list[uuid.UUID] | None = None
+    if search is not None:
+        job_ids = await job_repo.search_job_ids_by_message(db, search)
+        if not job_ids:
+            return AlertList(items=[], total=0)
+
     if resolved:
-        items = await alert_repo.list_recent(db, limit=limit, offset=offset, include_resolved=True)
+        items = await alert_repo.list_recent(
+            db, limit=limit, offset=offset, include_resolved=True, job_ids=job_ids
+        )
         total = len(items)  # naive but small enough for a v1
     else:
-        items = await alert_repo.list_open(db, kinds=kinds, limit=limit, offset=offset)
-        total = await alert_repo.count_open(db, kinds=kinds)
+        items = await alert_repo.list_open(
+            db, kinds=kinds, job_ids=job_ids, limit=limit, offset=offset
+        )
+        total = await alert_repo.count_open(db, kinds=kinds, job_ids=job_ids)
     return AlertList(items=await _read_list(db, items), total=total)
 
 
@@ -100,9 +116,7 @@ async def get_alert(
             message="Alert not found",
             details={"alert_id": str(alert_id)},
         )
-    summaries = await job_repo.get_alert_job_summaries(
-        db, [alert.job_id] if alert.job_id else []
-    )
+    summaries = await job_repo.get_alert_job_summaries(db, [alert.job_id] if alert.job_id else [])
     return _alert_to_read(alert, job_summary=summaries.get(alert.job_id))
 
 

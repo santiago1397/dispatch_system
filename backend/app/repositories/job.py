@@ -5,7 +5,9 @@ from datetime import UTC, datetime
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
+from app.db.models.dispatch_job import DispatchJob
 from app.db.models.job import Job
 
 
@@ -385,3 +387,72 @@ async def list_by_status(
     )
     result = await db.execute(query)
     return list(result.scalars().all())
+
+
+async def get_alert_job_summaries(
+    db: AsyncSession,
+    job_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, dict]:
+    """Batch-resolve parent-Job summaries for the alerts dashboard.
+
+    Alerts reference a parent ``jobs.id``, but the operator-facing job
+    page is keyed by the child ``dispatch_jobs.id``. This bridges the two:
+    for each parent Job it returns the company + address + lifecycle status
+    plus the *originating* ``DispatchJob`` (the earliest child, i.e. the
+    message that opened the job) and a short preview of that message so the
+    alert row can show "why + which job + which message" and link straight
+    to ``/jobs/{dispatch_job_id}``.
+
+    Returns a dict keyed by parent ``job_id``; job_ids with no matching
+    Job are simply absent. One query for the Jobs and one for the child
+    DispatchJobs — no per-alert round-trip.
+    """
+    if not job_ids:
+        return {}
+
+    unique_ids = list(set(job_ids))
+
+    jobs_q = select(Job).where(Job.id.in_(unique_ids)).options(selectinload(Job.company))
+    jobs = list((await db.execute(jobs_q)).scalars().all())
+
+    # Earliest child DispatchJob per parent = the message that opened the
+    # job. Ordering by (job_id, created_at ASC) then keeping the first seen
+    # per job_id gives us that without a window function.
+    dj_q = (
+        select(DispatchJob)
+        .where(DispatchJob.job_id.in_(unique_ids))
+        .order_by(DispatchJob.job_id, DispatchJob.created_at.asc())
+        .options(selectinload(DispatchJob.incoming_message))
+    )
+    origin_by_job: dict[uuid.UUID, DispatchJob] = {}
+    for dj in (await db.execute(dj_q)).scalars().all():
+        if dj.job_id is not None and dj.job_id not in origin_by_job:
+            origin_by_job[dj.job_id] = dj
+
+    summaries: dict[uuid.UUID, dict] = {}
+    for job in jobs:
+        origin = origin_by_job.get(job.id)
+        message = origin.incoming_message if origin is not None else None
+        address = (
+            " ".join(
+                p for p in (job.address_street_number, job.address_street_name) if p
+            ).strip()
+            or (origin.address if origin is not None else None)
+        )
+        preview = None
+        if message is not None and message.content:
+            preview = message.content[:200]
+        summaries[job.id] = {
+            "job_id": job.id,
+            "dispatch_job_id": origin.id if origin is not None else None,
+            "company_name": job.company.display_name if job.company else None,
+            "lifecycle_status": job.lifecycle_status,
+            "address": address or None,
+            "customer_name": origin.customer_name if origin is not None else None,
+            "customer_phone": job.customer_phone_e164
+            or (origin.customer_phone if origin is not None else None),
+            "job_type": job.job_type or (origin.job_type if origin is not None else None),
+            "message_preview": preview,
+            "message_source": message.source if message is not None else None,
+        }
+    return summaries

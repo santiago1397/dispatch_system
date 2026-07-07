@@ -4,12 +4,18 @@ import { cn } from "@/lib/utils";
 import { ALERT_KIND_LABEL, type AlertKind } from "@/types";
 
 const STYLE: Record<AlertKind, string> = {
+  undispatched:
+    "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200",
   stuck_dispatched:
     "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-200",
   stuck_in_progress:
     "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-200",
   appt_time_passed:
     "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200",
+  follow_up_due:
+    "bg-teal-100 text-teal-800 dark:bg-teal-900/40 dark:text-teal-200",
+  company_update_unsent:
+    "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-200",
   closing_missing:
     "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200",
   dispatch_no_match:

@@ -8,9 +8,12 @@
  */
 
 export const ALERT_KINDS = [
+  "undispatched",
   "stuck_dispatched",
   "stuck_in_progress",
   "appt_time_passed",
+  "follow_up_due",
+  "company_update_unsent",
   "closing_missing",
   "dispatch_no_match",
   "unattributed_reply",
@@ -19,13 +22,34 @@ export const ALERT_KINDS = [
 export type AlertKind = (typeof ALERT_KINDS)[number];
 
 export const ALERT_KIND_LABEL: Record<AlertKind, string> = {
+  undispatched: "Undispatched",
   stuck_dispatched: "Stuck dispatched",
   stuck_in_progress: "Stuck in progress",
   appt_time_passed: "Appointment time passed",
+  follow_up_due: "Follow-up due",
+  company_update_unsent: "Update not relayed",
   closing_missing: "Closing missing",
   dispatch_no_match: "Dispatch no match",
   unattributed_reply: "Unattributed reply",
 };
+
+/**
+ * The parent Job an alert points at, resolved server-side. Mirrors
+ * ``backend/app/schemas/alert.py::AlertJobSummary``. ``dispatch_job_id``
+ * is what the operator-facing ``/jobs/{id}`` page is keyed by.
+ */
+export interface AlertJobSummary {
+  job_id: string;
+  dispatch_job_id: string | null;
+  company_name: string | null;
+  lifecycle_status: string | null;
+  address: string | null;
+  customer_name: string | null;
+  customer_phone: string | null;
+  job_type: string | null;
+  message_preview: string | null;
+  message_source: string | null;
+}
 
 export interface Alert {
   id: string;
@@ -37,6 +61,7 @@ export interface Alert {
   resolved_at: string | null;
   resolved_by_user_id: string | null;
   payload: Record<string, unknown>;
+  job: AlertJobSummary | null;
   created_at: string;
   updated_at: string | null;
 }

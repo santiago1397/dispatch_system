@@ -21,14 +21,30 @@ from fastapi import APIRouter, Query
 from app.api.deps import CurrentUser, DBSession
 from app.core.exceptions import NotFoundError
 from app.repositories import alert as alert_repo
-from app.schemas.alert import AlertList, AlertRead
+from app.repositories import job as job_repo
+from app.schemas.alert import AlertJobSummary, AlertList, AlertRead
 
 router = APIRouter()
 
 
-def _alert_to_read(alert) -> AlertRead:
-    """Convert an Alert ORM row to the response schema."""
-    return AlertRead.model_validate(alert)
+def _alert_to_read(alert, *, job_summary: dict | None = None) -> AlertRead:
+    """Convert an Alert ORM row to the response schema.
+
+    ``job_summary`` is the pre-resolved parent-Job dict (from
+    ``job_repo.get_alert_job_summaries``) for job-bound alerts; None for
+    chat-bound alerts or when the parent Job no longer exists.
+    """
+    data = AlertRead.model_validate(alert)
+    if job_summary is not None:
+        return data.model_copy(update={"job": AlertJobSummary(**job_summary)})
+    return data
+
+
+async def _read_list(db, alerts: list) -> list[AlertRead]:
+    """Batch-enrich a list of alerts with their parent-Job summaries."""
+    job_ids = [a.job_id for a in alerts if a.job_id is not None]
+    summaries = await job_repo.get_alert_job_summaries(db, job_ids)
+    return [_alert_to_read(a, job_summary=summaries.get(a.job_id)) for a in alerts]
 
 
 @router.get(
@@ -64,7 +80,7 @@ async def list_alerts(
     else:
         items = await alert_repo.list_open(db, kinds=kinds, limit=limit, offset=offset)
         total = await alert_repo.count_open(db, kinds=kinds)
-    return AlertList(items=[_alert_to_read(a) for a in items], total=total)
+    return AlertList(items=await _read_list(db, items), total=total)
 
 
 @router.get(
@@ -84,7 +100,10 @@ async def get_alert(
             message="Alert not found",
             details={"alert_id": str(alert_id)},
         )
-    return _alert_to_read(alert)
+    summaries = await job_repo.get_alert_job_summaries(
+        db, [alert.job_id] if alert.job_id else []
+    )
+    return _alert_to_read(alert, job_summary=summaries.get(alert.job_id))
 
 
 @router.post(

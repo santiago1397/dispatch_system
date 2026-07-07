@@ -27,14 +27,13 @@ from app.core.webhook import (
     verify_webhook_signature,
 )
 
-
 # ---------------------------------------------------------------------------
 # Legacy OpenPhone scheme
 # ---------------------------------------------------------------------------
 
 
 def _sign_legacy(secret: str, body: bytes, ts_ms: int) -> str:
-    signing = f"{ts_ms}.".encode("utf-8") + body
+    signing = f"{ts_ms}.".encode() + body
     sig_b64 = base64.b64encode(
         hmac.new(secret.encode("utf-8"), signing, hashlib.sha256).digest()
     ).decode("ascii")
@@ -126,7 +125,7 @@ def test_empty_secret_in_local_skips(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _sign_beta(secret_bytes: bytes, body: bytes, ts_s: int, wid: str) -> str:
-    signing = f"{wid}.{ts_s}.".encode("utf-8") + body
+    signing = f"{wid}.{ts_s}.".encode() + body
     sig_b64 = base64.b64encode(hmac.new(secret_bytes, signing, hashlib.sha256).digest()).decode(
         "ascii"
     )
@@ -296,6 +295,6 @@ def test_real_captured_log_line_with_both_legacy_and_beta(
 
 # Sanity check — we didn't break the public alias.
 def test_public_alias_still_importable() -> None:
-    from app.core.webhook import verify_openphone_signature as legacy  # noqa: F401
+    from app.core.webhook import verify_openphone_signature as legacy
 
     assert legacy is verify_openphone_signature

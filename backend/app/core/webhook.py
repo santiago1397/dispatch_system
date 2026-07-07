@@ -26,7 +26,7 @@ import hashlib
 import hmac
 import logging
 import time
-from typing import Iterable
+from collections.abc import Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +139,7 @@ def _verify_legacy_openphone(payload: bytes, signature_header: str | None, secre
         )
         return False
 
-    signing = f"{ts_ms}.".encode("utf-8") + payload
+    signing = f"{ts_ms}.".encode() + payload
     for key_bytes in _candidate_legacy_keys(secret):
         expected_sig_b64 = base64.b64encode(
             hmac.new(key_bytes, signing, hashlib.sha256).digest()
@@ -197,7 +197,7 @@ def _verify_quo_beta(
 
     wid = id_header or ""
     key_bytes = _decode_beta_key(secret)
-    signing = f"{wid}.{ts_s}.".encode("utf-8") + payload
+    signing = f"{wid}.{ts_s}.".encode() + payload
     expected_b64 = base64.b64encode(hmac.new(key_bytes, signing, hashlib.sha256).digest()).decode(
         "ascii"
     )

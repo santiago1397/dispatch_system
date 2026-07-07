@@ -499,7 +499,7 @@ def _enforce_car_conditional(job_type: str | None, fields: dict) -> dict:
 def _compute_consistency_score(
     fields: dict, job_type: str | None, raw_body: str
 ) -> float:
-    """Deterministic 0.0–1.0 score. Replaces unreliable model confidence.
+    r"""Deterministic 0.0–1.0 score. Replaces unreliable model confidence.
 
     Rules (each contributes 0.25):
     - job_type in VALID_JOB_TYPES
@@ -537,9 +537,7 @@ def _compute_consistency_score(
             pass
     # Total
     total = fields.get("total")
-    if not total:
-        score += 0.25
-    elif isinstance(total, str) and _TOTAL_PATTERN.match(total.strip()):
+    if not total or (isinstance(total, str) and _TOTAL_PATTERN.match(total.strip())):
         score += 0.25
     return round(score, 2)
 

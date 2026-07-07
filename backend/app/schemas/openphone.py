@@ -1,7 +1,6 @@
 """Schemas for the Quo (OpenPhone) API integration."""
 
 from datetime import datetime
-from typing import Literal
 from uuid import UUID
 
 from pydantic import ConfigDict, Field, model_validator

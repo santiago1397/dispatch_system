@@ -41,6 +41,19 @@ REJECT_PHRASES: frozenset[str] = frozenset(
         "can't take it",
         "cant take this",
         "can't take this",
+        # "cant do" family — operator declines a specific job
+        "cant do",
+        "can't do",
+        "cannot do",
+        "cant do it",
+        "can't do it",
+        "no can do",
+        # "cant help" family
+        "cant help",
+        "can't help",
+        "cannot help",
+        "sorry cant help",
+        "sorry can't help",
     }
 )
 
@@ -51,6 +64,26 @@ REJECT_PHRASES: frozenset[str] = frozenset(
 _ZIP_RE = re.compile(r"\b\d{5}\b")
 _PASS_TOKEN_RE = re.compile(r"\b(?:pass|passing)\b")
 _ZIP_PASS_MAX_TOKENS = 4
+
+# Prefix check: handles "cant do, too old" / "pass, no parts" — operator
+# adds a short reason after the reject phrase. After normalization commas
+# become spaces, so "cant do, too old" → "cant do too old" which starts
+# with "cant do ". Only applied when the message is short enough that it
+# can't be a re-pasted job body.
+_REJECT_PREFIX_MAX_TOKENS = 12
+
+# Free-form keyword patterns for short messages where the operator writes
+# a natural-language decline ("sorry we have no one for now", "no one
+# available at the moment"). Only matched when the message is short.
+_REJECT_KEYWORD_PATTERNS: list = [
+    re.compile(r"\bno\s+one\b", re.IGNORECASE),          # "no one for now", "no one available"
+    re.compile(r"\bnobody\s+available\b", re.IGNORECASE),
+    re.compile(r"\bno\s+techs?\s+available\b", re.IGNORECASE),
+    re.compile(r"\bno\s+one\s+available\b", re.IGNORECASE),
+    re.compile(r"\bnot\s+available\b", re.IGNORECASE),
+    re.compile(r"\bsorry\b.{0,40}\bno\b", re.IGNORECASE),   # "sorry, we have no..."
+]
+_REJECT_KEYWORD_MAX_TOKENS = 12
 
 # Re-paste-with-note: the operator copies the job body and appends a short
 # note ("...too far", "pass, no parts"). We treat it as a reject when the
@@ -81,22 +114,47 @@ _NORMALIZED_REJECT_PHRASES: frozenset[str] = frozenset(_normalize(p) for p in RE
 def is_reject_phrase(body: str) -> bool:
     """True if ``body`` is a standalone operator reject phrase.
 
-    Matches the exact-phrase list and the "<zip> pass" pattern. Does NOT
-    consider re-pastes — use :func:`is_reject_signal` for the full check.
+    Matches (in order):
+    1. Exact phrase list.
+    2. "<zip> pass" pattern.
+    3. Prefix match for short messages — "cant do, too old" / "pass, no
+       parts" — where a reject phrase leads and the operator appends a
+       brief reason. After normalization commas become spaces so
+       "cant do, too old" → "cant do too old" which starts with "cant do ".
+    4. Free-form keyword patterns for short natural-language declines
+       ("sorry we have no one for now").
+
+    Does NOT consider re-pastes — use :func:`is_reject_signal` for that.
     """
     normalized = _normalize(body)
     if not normalized:
         return False
     if normalized in _NORMALIZED_REJECT_PHRASES:
         return True
-    # "<zip> pass" / "pass <zip>" — a pass token next to a ZIP, and short
-    # enough that it can't be a full re-pasted job message.
+
     tokens = normalized.split()
-    return bool(
+
+    # "<zip> pass" / "pass <zip>"
+    if (
         len(tokens) <= _ZIP_PASS_MAX_TOKENS
         and _PASS_TOKEN_RE.search(normalized)
         and _ZIP_RE.search(normalized)
-    )
+    ):
+        return True
+
+    # Prefix check: reject phrase + short extra context
+    if len(tokens) <= _REJECT_PREFIX_MAX_TOKENS:
+        for phrase in _NORMALIZED_REJECT_PHRASES:
+            if normalized == phrase or normalized.startswith(phrase + " "):
+                return True
+
+    # Free-form keyword patterns (short messages only)
+    if len(tokens) <= _REJECT_KEYWORD_MAX_TOKENS:
+        for pattern in _REJECT_KEYWORD_PATTERNS:
+            if pattern.search(normalized):
+                return True
+
+    return False
 
 
 def is_repaste_with_note(body: str, job_body: str) -> bool:

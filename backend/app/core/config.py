@@ -138,7 +138,7 @@ class Settings(BaseSettings):
     # After a tech update, the operator must relay it to the source company
     # (natively — we never send). If no operator outbound to the company is
     # observed within this window, a ``company_update_unsent`` reminder fires.
-    ALERTS_COMPANY_UPDATE_UNSENT_MINUTES: int = 7
+    ALERTS_COMPANY_UPDATE_UNSENT_MINUTES: int = 8
     ALERTS_STUCK_DISPATCHED_MINUTES: int = 240  # 4 hours
     ALERTS_STUCK_IN_PROGRESS_MINUTES: int = 480  # 8 hours
     ALERTS_APPT_PASSED_GRACE_MINUTES: int = 60  # 1 hour after the appt

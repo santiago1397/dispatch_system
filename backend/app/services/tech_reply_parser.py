@@ -50,10 +50,14 @@ TECH_DECISION_MAX_MESSAGES = 2
 
 logger = logging.getLogger(__name__)
 
-# Window for fallback attribution when no quote is present. Two operators
-# dispatching in the same chat back-to-back is rare but possible; 60
-# minutes is the cap before we surface ``ambiguous_attribution``.
-ATTRIBUTION_WINDOW_MINUTES = 60
+# Window for fallback attribution when no quote is present. Must cover
+# how long a dispatched job can realistically sit before the tech reports
+# back (a tech may drive out, find the site a no-go, and reply hours
+# later) — matched to ``ALERTS_STUCK_DISPATCHED_MINUTES`` (4h) so a
+# same-day update never falls outside the window and silently no-ops.
+# Two operators dispatching in the same chat within the window is rare
+# but possible; that's what ``ambiguous_attribution`` is for.
+ATTRIBUTION_WINDOW_MINUTES = 240
 
 # Map from TechReplyIntentCode → LifecycleStatus value. Centralized here
 # so the LLM extraction schema and the state machine stay in sync — add

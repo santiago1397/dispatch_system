@@ -209,6 +209,57 @@ class TestClosingMissing:
         assert kwargs["kind"] == AlertKind.CLOSING_MISSING.value
 
 
+class TestClosingUnfiled:
+    @pytest.mark.anyio
+    async def test_flags_completed_job_past_threshold(self):
+        engine, db = _make_engine_with_db()
+
+        # completed 20 min ago (> 15 min SLA) with no closing filed yet.
+        job = _make_job(lifecycle_status="completed", changed_minutes_ago=20)
+
+        # Two SQL calls: SELECT completed candidates, then open alert job_ids.
+        candidate_result = MagicMock()
+        candidate_result.scalars.return_value.all.return_value = [job]
+        empty_result = MagicMock()
+        empty_result.scalars.return_value.all.return_value = []
+        db.execute.side_effect = [candidate_result, empty_result]
+
+        with patch(
+            "app.services.alerts.alert_repo.create_or_get_open",
+            new=AsyncMock(),
+        ) as create:
+            created, already = await engine._scan_closing_unfiled(datetime.now(UTC))
+
+        assert created == 1
+        assert already == 0
+        kwargs = create.call_args.kwargs
+        assert kwargs["kind"] == AlertKind.CLOSING_UNFILED.value
+        assert kwargs["job_id"] == job.id
+        assert kwargs["threshold_minutes"] == 15
+
+    @pytest.mark.anyio
+    async def test_skips_when_alert_already_open(self):
+        engine, db = _make_engine_with_db()
+
+        job = _make_job(lifecycle_status="completed", changed_minutes_ago=20)
+
+        candidate_result = MagicMock()
+        candidate_result.scalars.return_value.all.return_value = [job]
+        open_ids_result = MagicMock()
+        open_ids_result.scalars.return_value.all.return_value = [job.id]
+        db.execute.side_effect = [candidate_result, open_ids_result]
+
+        with patch(
+            "app.services.alerts.alert_repo.create_or_get_open",
+            new=AsyncMock(),
+        ) as create:
+            created, already = await engine._scan_closing_unfiled(datetime.now(UTC))
+
+        assert created == 0
+        assert already == 1
+        create.assert_not_called()
+
+
 class TestApptTimePassed:
     @pytest.mark.anyio
     async def test_flags_when_appt_iso_is_parseable_and_in_past(self):

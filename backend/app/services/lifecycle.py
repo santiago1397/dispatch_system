@@ -262,6 +262,7 @@ class LifecycleService:
                     "appt_time_passed",
                     "follow_up_due",
                     "closing_missing",
+                    "closing_unfiled",
                 ],
             )
 

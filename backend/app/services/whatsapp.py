@@ -185,7 +185,37 @@ class WhatsappService:
         dispatched = 0
         tech_reply_enqueued = 0
         if bulk_succeeded:
+            from app.services.classification import CLOSING_CHAT_JID
+            from app.services.closing_signal import ClosingSignalService
+
             for _, msg in valid_items:
+                # Closing-signal gate — a tech's payment/closing re-paste in
+                # ANY tracked chat (the Dispatch Closing group excepted; it
+                # has its own branch in classification) marks the matched Job
+                # ``completed`` and short-circuits all downstream handling so
+                # the re-pasted address never spawns a linked DispatchJob.
+                if msg.chat_jid != CLOSING_CHAT_JID:
+                    try:
+                        handled = await ClosingSignalService(self.db).detect_and_complete(
+                            body=getattr(msg, "body", None) or "",
+                            channel="whatsapp",
+                            source_meta={
+                                "chat_jid": getattr(msg, "chat_jid", None),
+                                "wa_message_id": getattr(msg, "wa_message_id", None),
+                                "sender_name": getattr(msg, "sender_name", None),
+                                "batch_id": batch_id,
+                            },
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Failed closing-signal gate for whatsapp msg %s in %s",
+                            getattr(msg, "wa_message_id", "?"),
+                            getattr(msg, "chat_jid", "?"),
+                        )
+                        handled = False
+                    if handled:
+                        continue
+
                 # Chat-role branch — operator↔tech chatter must NOT be
                 # mirrored into incoming_messages (those are customer
                 # traffic) and must NOT enter the dedup/classify pipeline.

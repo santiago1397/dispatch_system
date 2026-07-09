@@ -143,6 +143,13 @@ class Settings(BaseSettings):
     ALERTS_STUCK_IN_PROGRESS_MINUTES: int = 480  # 8 hours
     ALERTS_APPT_PASSED_GRACE_MINUTES: int = 60  # 1 hour after the appt
     ALERTS_CLOSING_GRACE_MINUTES: int = 1440  # 24 hours with no close
+    # After a tech's payment/closing signal marks a Job ``completed``, the
+    # operator must file the closing in the "Dispatch Closing" WhatsApp
+    # group (natively — we never send). If no matching closing lands within
+    # this window the engine raises a ``closing_unfiled`` alert. Detection
+    # latency is bounded by ALERT_ENGINE_INTERVAL_MINUTES (the scan cadence),
+    # so the alert fires ~15-20 min after the payment signal in practice.
+    ALERTS_CLOSING_RELAY_UNSENT_MINUTES: int = 15
     STATS_DAILY_HOUR: int = 23
     STATS_DAILY_MINUTE: int = 55
 

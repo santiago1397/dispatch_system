@@ -37,6 +37,9 @@ class AlertKind(StrEnum):
     # The operator hasn't relayed a tech update to the source company yet.
     COMPANY_UPDATE_UNSENT = "company_update_unsent"
     CLOSING_MISSING = "closing_missing"
+    # A tech's payment signal marked the job ``completed`` but the operator
+    # hasn't filed the closing in the "Dispatch Closing" group yet.
+    CLOSING_UNFILED = "closing_unfiled"
     UNATTRIBUTED_REPLY = "unattributed_reply"
     DISPATCH_NO_MATCH = "dispatch_no_match"
 

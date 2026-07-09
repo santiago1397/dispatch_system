@@ -173,6 +173,56 @@ async def find_for_closing(
     return result.scalar_one_or_none()
 
 
+async def find_open_by_address_phone(
+    db: AsyncSession,
+    *,
+    street_number: str | None,
+    street_name: str | None,
+    customer_phone_e164: str | None,
+    since: datetime,
+) -> Job | None:
+    """Company-agnostic match of a Job by address+phone for the closing-signal gate.
+
+    Like ``find_for_closing`` but **without** the ``company_id`` filter — a
+    tech's payment/closing re-paste arrives in an arbitrary chat where the
+    company hasn't been (and needn't be) classified. A candidate matches
+    when **either** the normalized address (street_number AND street_name)
+    matches, **or** the normalized customer phone matches — within the
+    ``since`` window. Returns the first-seen (oldest) Job, mirroring the
+    closing pipeline's "original first job" semantics.
+
+    Returns any matching Job regardless of ``lifecycle_status``; the caller
+    (``ClosingSignalService``) decides whether to transition it (non-terminal)
+    or drop the signal (already ``completed``/terminal). Same-address
+    collisions between two companies in the window are tolerated — the same
+    edge the dedup pipeline already accepts.
+    """
+    address_match = None
+    if street_number and street_name:
+        address_match = and_(
+            Job.address_street_number == street_number,
+            Job.address_street_name == street_name,
+        )
+
+    phone_match = None
+    if customer_phone_e164:
+        phone_match = Job.customer_phone_e164 == customer_phone_e164
+
+    conditions = [c for c in (address_match, phone_match) if c is not None]
+    if not conditions:
+        return None
+
+    query = (
+        select(Job)
+        .where(Job.first_message_at >= since, or_(*conditions))
+        .order_by(Job.first_message_at.asc())
+        .limit(1)
+    )
+
+    result = await db.execute(query)
+    return result.scalar_one_or_none()
+
+
 async def mark_job_closed(
     db: AsyncSession,
     *,

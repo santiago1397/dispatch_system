@@ -32,6 +32,12 @@ class LifecycleEventSource(StrEnum):
     OPERATOR_OPENPHONE = "operator_openphone"
     TECH_OPENPHONE = "tech_openphone"
     CLOSING_CHAT = "closing_chat"
+    # A tech's payment/closing re-paste detected in any tracked chat,
+    # transitioning the matched Job to ``completed``. See
+    # ``services/closing_signal.py``. Distinct from ``CLOSING_CHAT``, which
+    # is the operator's authoritative closing filed in the Dispatch Closing
+    # group and is the only source that may reach the terminal ``closed``.
+    CLOSING_SIGNAL = "closing_signal"
     MANUAL = "manual"
     AMBIGUOUS_ATTRIBUTION = "ambiguous_attribution"
     # Operator declined the job in the source chat (reject-phrase or a

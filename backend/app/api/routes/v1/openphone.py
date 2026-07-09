@@ -123,6 +123,30 @@ async def receive_openphone_webhook(
                 await db.rollback()
                 return
 
+            # Closing-signal gate — runs FIRST, before any routing. A tech's
+            # payment/closing re-paste (same address+phone as an existing job
+            # plus settlement info) marks the matched Job ``completed`` and
+            # short-circuits all downstream handling, so the re-paste never
+            # spawns a linked DispatchJob via classification.
+            try:
+                from app.services.closing_signal import ClosingSignalService
+
+                if await ClosingSignalService(db).detect_and_complete(
+                    body=message.content or "",
+                    channel="openphone",
+                    source_meta={
+                        "openphone_id": message.openphone_id,
+                        "from_number": message.from_number,
+                    },
+                ):
+                    await db.commit()
+                    return
+            except Exception:
+                logger.exception(
+                    "Failed closing-signal gate for OpenPhone message %s", message.id
+                )
+                await db.rollback()
+
             # Technician (Quo dispatch chat) routing — runs BEFORE the
             # generic classify path so an inbound job message from a tech
             # is classified via the same pipeline (decided upstream), and

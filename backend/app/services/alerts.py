@@ -89,6 +89,7 @@ class AlertEngine:
             self._scan_appt_time_passed,
             self._scan_follow_up_due,
             self._scan_company_update_unsent,
+            self._scan_closing_unfiled,
             self._scan_closing_missing,
         ):
             c, a = await fn(now)
@@ -409,6 +410,56 @@ class AlertEngine:
             )
             return n > 0
         return False
+
+    async def _scan_closing_unfiled(self, now: datetime) -> tuple[int, int]:
+        """Flag ``completed`` jobs whose closing hasn't been filed within the SLA.
+
+        A tech's payment signal transitions the Job to ``completed`` (see
+        ``services/closing_signal.py``). The operator must then file the
+        closing in the "Dispatch Closing" WhatsApp group; the closing
+        pipeline is the ONLY path from ``completed`` to the terminal
+        ``closed`` (``source='closing_chat'``). So a Job still sitting in
+        ``completed`` past ``ALERTS_CLOSING_RELAY_UNSENT_MINUTES`` means the
+        closing hasn't landed — no separate "was it sent?" check is needed,
+        because a filed closing has already moved the Job out of ``completed``.
+
+        Distinct from ``closing_missing`` (24h): that scan's ``non_terminal``
+        set excludes ``completed``, so the two never double-fire on one job.
+        Auto-resolves when the Job reaches ``closed`` — see
+        ``LifecycleService.transition``'s terminal cleanup.
+        """
+        threshold_minutes = settings.ALERTS_CLOSING_RELAY_UNSENT_MINUTES
+        cutoff = now - timedelta(minutes=threshold_minutes)
+        query = (
+            select(Job)
+            .where(
+                Job.lifecycle_status == LifecycleStatus.COMPLETED.value,
+                Job.lifecycle_status_changed_at.is_not(None),
+                Job.lifecycle_status_changed_at < cutoff,
+            )
+            .order_by(Job.lifecycle_status_changed_at.asc())
+        )
+        candidates = list((await self.db.execute(query)).scalars().all())
+
+        already_job_ids = await self._open_alert_job_ids(AlertKind.CLOSING_UNFILED.value)
+        candidates = [j for j in candidates if j.id not in already_job_ids]
+
+        created = 0
+        for job in candidates:
+            await alert_repo.create_or_get_open(
+                self.db,
+                kind=AlertKind.CLOSING_UNFILED.value,
+                job_id=job.id,
+                threshold_minutes=threshold_minutes,
+                payload={
+                    "since": job.lifecycle_status_changed_at.isoformat()
+                    if job.lifecycle_status_changed_at
+                    else None,
+                },
+                detected_at=now,
+            )
+            created += 1
+        return created, len(already_job_ids)
 
     async def _scan_closing_missing(self, now: datetime) -> tuple[int, int]:
         """Flag non-terminal jobs with no close after CLOSING_GRACE_MINUTES.

@@ -148,8 +148,16 @@ class Settings(BaseSettings):
     # group (natively — we never send). If no matching closing lands within
     # this window the engine raises a ``closing_unfiled`` alert. Detection
     # latency is bounded by ALERT_ENGINE_INTERVAL_MINUTES (the scan cadence),
-    # so the alert fires ~15-20 min after the payment signal in practice.
-    ALERTS_CLOSING_RELAY_UNSENT_MINUTES: int = 15
+    # so the alert fires ~7-12 min after the payment signal in practice.
+    ALERTS_CLOSING_RELAY_UNSENT_MINUTES: int = 7
+    # Dead-man's switch for the WhatsApp extension itself. If at least one
+    # tracked chat is active but no ``whatsapp_messages`` row has landed in
+    # this many minutes, the WhatsApp scraper is presumed disconnected (tab
+    # closed, logged out, extension crashed) — every downstream alert that
+    # depends on WhatsApp ingestion (closing_unfiled, stuck_*, etc.) goes
+    # blind during an outage like this, since nothing reaches the pipeline
+    # to alert on in the first place. Raises ``whatsapp_ingestion_stalled``.
+    ALERTS_WHATSAPP_INGESTION_STALLED_MINUTES: int = 30
     STATS_DAILY_HOUR: int = 23
     STATS_DAILY_MINUTE: int = 55
 

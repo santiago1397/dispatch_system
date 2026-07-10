@@ -39,10 +39,16 @@ from app.core.config import settings
 from app.db.models.alert import Alert, AlertKind
 from app.db.models.job import Job
 from app.db.models.job_lifecycle_event import JobLifecycleEvent, LifecycleEventSource
+from app.db.models.whatsapp import WhatsappMessage, WhatsappTrackedChat
 from app.repositories import alert as alert_repo
 from app.repositories import company_update_repo, openphone_repo, whatsapp_repo
 from app.services.lifecycle import LifecycleStatus
 from app.services.timeparse import parse_iso8601
+
+# Sentinel chat_jid for the system-wide ingestion watchdog alert — it isn't
+# bound to any one chat, but create_or_get_open's idempotency needs either
+# a job_id or a chat_jid to dedup on.
+_INGESTION_WATCHDOG_CHAT_JID = "__system__:whatsapp_ingestion"
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +97,7 @@ class AlertEngine:
             self._scan_company_update_unsent,
             self._scan_closing_unfiled,
             self._scan_closing_missing,
+            self._scan_whatsapp_ingestion_stalled,
         ):
             c, a = await fn(now)
             created[fn.__name__.removeprefix("_scan_")] = c
@@ -512,6 +519,69 @@ class AlertEngine:
             )
             created += 1
         return created, len(already_job_ids)
+
+    async def _scan_whatsapp_ingestion_stalled(self, now: datetime) -> tuple[int, int]:
+        """Dead-man's switch for the WhatsApp extension itself.
+
+        Every other WhatsApp-derived alert (``closing_unfiled``,
+        ``stuck_dispatched``, etc.) depends on messages actually reaching
+        ``whatsapp_messages`` — if the extension's browser tab is closed,
+        WhatsApp Web logs out, or the service worker crashes, nothing
+        downstream ever fires because there's no data to alert on. This
+        scan is the only thing that watches the pipe itself rather than
+        what flows through it.
+
+        Fires once (idempotent on the sentinel ``chat_jid``) when no
+        message has landed in ``ALERTS_WHATSAPP_INGESTION_STALLED_MINUTES``
+        despite at least one active tracked chat existing. Auto-resolves
+        the moment a fresh message arrives.
+        """
+        threshold_minutes = settings.ALERTS_WHATSAPP_INGESTION_STALLED_MINUTES
+        cutoff = now - timedelta(minutes=threshold_minutes)
+
+        has_active_chat = (
+            await self.db.execute(
+                select(WhatsappTrackedChat.id).where(WhatsappTrackedChat.is_active.is_(True)).limit(1)
+            )
+        ).scalar_one_or_none()
+
+        existing = (
+            await self.db.execute(
+                select(Alert).where(
+                    and_(
+                        Alert.kind == AlertKind.WHATSAPP_INGESTION_STALLED.value,
+                        Alert.chat_jid == _INGESTION_WATCHDOG_CHAT_JID,
+                        Alert.resolved_at.is_(None),
+                    )
+                )
+            )
+        ).scalar_one_or_none()
+
+        if has_active_chat is None:
+            # Nothing tracked at all — not an outage, just no config.
+            return 0, 1 if existing else 0
+
+        last_message_at = (await self.db.execute(select(func.max(WhatsappMessage.timestamp)))).scalar_one()
+
+        if last_message_at is not None and last_message_at >= cutoff:
+            if existing is not None:
+                existing.resolved_at = now
+                self.db.add(existing)
+                await self.db.flush()
+            return 0, 0
+
+        if existing is not None:
+            return 0, 1
+
+        await alert_repo.create_or_get_open(
+            self.db,
+            kind=AlertKind.WHATSAPP_INGESTION_STALLED.value,
+            chat_jid=_INGESTION_WATCHDOG_CHAT_JID,
+            threshold_minutes=threshold_minutes,
+            payload={"last_message_at": last_message_at.isoformat() if last_message_at else None},
+            detected_at=now,
+        )
+        return 1, 0
 
     # -----------------------------------------------------------------
     # Helpers

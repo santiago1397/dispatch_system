@@ -15,8 +15,10 @@ export const ALERT_KINDS = [
   "follow_up_due",
   "company_update_unsent",
   "closing_missing",
+  "closing_unfiled",
   "dispatch_no_match",
   "unattributed_reply",
+  "whatsapp_ingestion_stalled",
 ] as const;
 
 export type AlertKind = (typeof ALERT_KINDS)[number];
@@ -29,8 +31,10 @@ export const ALERT_KIND_LABEL: Record<AlertKind, string> = {
   follow_up_due: "Follow-up due",
   company_update_unsent: "Update not relayed",
   closing_missing: "Closing missing",
+  closing_unfiled: "Closing unfiled",
   dispatch_no_match: "Dispatch no match",
   unattributed_reply: "Unattributed reply",
+  whatsapp_ingestion_stalled: "WhatsApp not syncing",
 };
 
 /**

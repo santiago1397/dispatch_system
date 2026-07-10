@@ -18,10 +18,14 @@ const STYLE: Record<AlertKind, string> = {
     "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-200",
   closing_missing:
     "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200",
+  closing_unfiled:
+    "bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-200",
   dispatch_no_match:
     "bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-200",
   unattributed_reply:
     "bg-pink-100 text-pink-800 dark:bg-pink-900/40 dark:text-pink-200",
+  whatsapp_ingestion_stalled:
+    "bg-slate-200 text-slate-900 dark:bg-slate-800 dark:text-slate-100",
 };
 
 export function AlertKindBadge({

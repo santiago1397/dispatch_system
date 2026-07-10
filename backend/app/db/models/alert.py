@@ -42,6 +42,12 @@ class AlertKind(StrEnum):
     CLOSING_UNFILED = "closing_unfiled"
     UNATTRIBUTED_REPLY = "unattributed_reply"
     DISPATCH_NO_MATCH = "dispatch_no_match"
+    # Dead-man's switch: no WhatsApp message has landed in
+    # ALERTS_WHATSAPP_INGESTION_STALLED_MINUTES despite active tracked
+    # chats — the extension is presumed disconnected. Every other
+    # WhatsApp-sourced alert is blind while this is open, since nothing
+    # from WhatsApp is reaching the pipeline at all.
+    WHATSAPP_INGESTION_STALLED = "whatsapp_ingestion_stalled"
 
 
 class Alert(Base, TimestampMixin):

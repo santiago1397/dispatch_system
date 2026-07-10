@@ -69,10 +69,18 @@ export function describeAlert(alert: Alert): string {
       const status = str(p, "lifecycle_status");
       return `No closing totals have arrived since ${since}${status ? `; the job is still ${status}` : ""}${slaSuffix}.`;
     }
+    case "closing_unfiled":
+      return `The tech reported payment ${since}, but it hasn't been filed in the Dispatch Closing group yet${slaSuffix}.`;
     case "dispatch_no_match":
       return `An operator dispatch message couldn't be matched to any pending job.`;
     case "unattributed_reply":
       return `A technician reply matched more than one job, so it couldn't be attributed automatically.`;
+    case "whatsapp_ingestion_stalled": {
+      const lastMsg = when(str(p, "last_message_at"));
+      return lastMsg
+        ? `No WhatsApp messages have come in since ${lastMsg} — the scraper extension is likely disconnected.`
+        : `No WhatsApp messages have ever been recorded — the scraper extension may not be connected.`;
+    }
     default:
       return `Pipeline-health issue detected.`;
   }

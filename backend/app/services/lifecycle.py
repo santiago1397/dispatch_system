@@ -141,6 +141,7 @@ class LifecycleService:
         source: str,
         payload: dict | None = None,
         user_id: uuid.UUID | None = None,
+        at: datetime | None = None,
     ) -> uuid.UUID:
         """Run a full lifecycle transition.
 
@@ -150,6 +151,13 @@ class LifecycleService:
         2. Insert ``job_lifecycle_events`` row.
         3. Update ``jobs.lifecycle_status`` + ``lifecycle_status_changed_at``.
         4. Auto-resolve stuck alerts when leaving a terminal state.
+
+        ``at`` anchors the event to when the underlying message/action
+        actually happened (e.g. the WhatsApp message's own timestamp),
+        not when this method happened to run — important for batch/backlog
+        ingestion, where processing time can trail the real event by
+        days. Defaults to ``datetime.now(UTC)`` when the caller has no
+        better timestamp (manual/API-triggered transitions).
 
         Returns the new ``job_lifecycle_events.id``. Caller commits.
 
@@ -204,7 +212,7 @@ class LifecycleService:
         if reason:
             job.last_tech_reason = str(reason)[:30]
 
-        now = datetime.now(UTC)
+        now = at or datetime.now(UTC)
         event = await lifecycle_event_repo.create_event(
             self.db,
             job_id=job.id,

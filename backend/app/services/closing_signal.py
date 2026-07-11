@@ -96,6 +96,7 @@ class ClosingSignalService:
         body: str,
         channel: str,
         source_meta: dict,
+        at: datetime | None = None,
     ) -> bool:
         """Detect a closing signal and complete the matched Job.
 
@@ -112,6 +113,9 @@ class ClosingSignalService:
         no-match per the design).
 
         Never raises — a detection failure must not break ingestion.
+
+        ``at`` anchors the resulting lifecycle event to the message's own
+        timestamp rather than processing time; see ``LifecycleService.transition``.
         """
         # Lazy import to avoid a module-level cycle (classification imports
         # nothing from here, but keep the boundary clean).
@@ -168,6 +172,7 @@ class ClosingSignalService:
                     "raw": (body or "")[:500],
                     **source_meta,
                 },
+                at=at,
             )
         except Exception:
             logger.exception(

@@ -25,6 +25,7 @@ from app.db.models.technician import Technician  # noqa: F401
 from app.db.models.job_lifecycle_event import JobLifecycleEvent  # noqa: F401
 from app.db.models.alert import Alert  # noqa: F401
 from app.db.models.daily_stats import DailyStatsSnapshot  # noqa: F401
+from app.db.models.openphone_thread_label import OpenPhoneThreadLabel  # noqa: F401
 
 config = context.config
 

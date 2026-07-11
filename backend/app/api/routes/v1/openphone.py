@@ -2,6 +2,7 @@
 
 import json
 import logging
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Request, Response, status
@@ -16,6 +17,10 @@ from app.core.webhook import (
 from app.schemas.openphone import (
     IncomingMessageList,
     IncomingMessageRead,
+    OpenPhoneThreadLabelRead,
+    OpenPhoneThreadLabelUpsert,
+    OpenPhoneThreadList,
+    OpenPhoneThreadSummary,
 )
 from app.services.openphone import OpenPhoneService
 
@@ -138,13 +143,12 @@ async def receive_openphone_webhook(
                         "openphone_id": message.openphone_id,
                         "from_number": message.from_number,
                     },
+                    at=message.created_at,
                 ):
                     await db.commit()
                     return
             except Exception:
-                logger.exception(
-                    "Failed closing-signal gate for OpenPhone message %s", message.id
-                )
+                logger.exception("Failed closing-signal gate for OpenPhone message %s", message.id)
                 await db.rollback()
 
             # Technician (Quo dispatch chat) routing — runs BEFORE the
@@ -165,9 +169,7 @@ async def receive_openphone_webhook(
                     await service.handle_tech_chat_message(message, tech)
                     await db.commit()
                 except Exception:
-                    logger.exception(
-                        "Failed to handle OpenPhone tech-chat message %s", message.id
-                    )
+                    logger.exception("Failed to handle OpenPhone tech-chat message %s", message.id)
                     await db.rollback()
                 return
 
@@ -193,10 +195,7 @@ async def receive_openphone_webhook(
             # normal classification pipeline. Outbound to a non-tech number
             # is otherwise ignored (the operator types customer replies in
             # the OpenPhone mobile app — we never send outbound messages).
-            if (
-                message.content
-                and (message.event_type or "").startswith("message.received")
-            ):
+            if message.content and (message.event_type or "").startswith("message.received"):
                 try:
                     from app.services.classification import JobClassificationService
 
@@ -375,3 +374,102 @@ async def get_incoming_message(
     """Get a persisted incoming message by ID."""
     message = await service.get_incoming_message(message_id)
     return IncomingMessageRead.model_validate(message)
+
+
+# =============================================================================
+# Conversation Threads — chat-style view over persisted messages
+# =============================================================================
+#
+# Derived from ``incoming_messages`` (source='openphone'), not Quo's own
+# ``/conversations`` endpoint above (that's a live API proxy for Quo's
+# conversation metadata, not a message thread). Path is ``/threads`` to
+# avoid colliding with that existing route.
+
+
+@router.get("/threads", response_model=OpenPhoneThreadList)
+async def list_threads(
+    service: OpenPhoneSvc,
+    _user: CurrentUser,
+    phone_number_id: str | None = None,
+    skip: int = 0,
+    limit: int = 50,
+):
+    """List OpenPhone conversation threads, most recently active first."""
+    threads, total = await service.list_threads(
+        phone_number_id=phone_number_id, skip=skip, limit=limit
+    )
+    return OpenPhoneThreadList(
+        items=[OpenPhoneThreadSummary.model_validate(t) for t in threads],
+        total=total,
+    )
+
+
+@router.get("/threads/{counterparty}/messages", response_model=IncomingMessageList)
+async def list_thread_messages(
+    counterparty: str,
+    service: OpenPhoneSvc,
+    _user: CurrentUser,
+    phone_number_id: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    skip: int = 0,
+    limit: int = 100,
+):
+    """List OpenPhone messages exchanged with ``counterparty``, newest-first."""
+    messages, total = await service.list_thread_messages(
+        counterparty=counterparty,
+        phone_number_id=phone_number_id,
+        since=since,
+        until=until,
+        skip=skip,
+        limit=limit,
+    )
+    return IncomingMessageList(
+        items=[IncomingMessageRead.model_validate(m) for m in messages],
+        total=total,
+    )
+
+
+def _to_label_read(counterparty: str, label) -> OpenPhoneThreadLabelRead:
+    company = label.company
+    return OpenPhoneThreadLabelRead(
+        counterparty=counterparty,
+        company_id=company.id if company is not None else None,
+        company_name=company.name if company is not None else None,
+        company_display_name=company.display_name if company is not None else None,
+        label=label.label,
+        created_at=label.created_at,
+        updated_at=label.updated_at,
+    )
+
+
+@router.put("/threads/{counterparty}/label", response_model=OpenPhoneThreadLabelRead)
+async def set_thread_label(
+    counterparty: str,
+    payload: OpenPhoneThreadLabelUpsert,
+    service: OpenPhoneSvc,
+    user: CurrentUser,
+):
+    """Set a thread's company reference and/or free-text label.
+
+    Display-only — never affects classification (see
+    ``app/db/models/openphone_thread_label.py``). At least one of
+    ``company_id``/``label`` must be non-null.
+    """
+    label = await service.upsert_thread_label(
+        counterparty=counterparty,
+        company_id=payload.company_id,
+        label=payload.label,
+        created_by_user_id=user.id,
+    )
+    return _to_label_read(counterparty, label)
+
+
+@router.delete("/threads/{counterparty}/label", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_thread_label(
+    counterparty: str,
+    service: OpenPhoneSvc,
+    _user: CurrentUser,
+):
+    """Clear a thread's company reference/label. No-op if unset."""
+    await service.delete_thread_label(counterparty)

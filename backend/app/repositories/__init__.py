@@ -17,6 +17,8 @@ from app.repositories import company as company_repo
 
 from app.repositories import company_phone_binding as phone_binding_repo
 
+from app.repositories import openphone_thread_label as thread_label_repo
+
 from app.repositories import dispatch_job as dispatch_job_repo
 
 from app.repositories import job as job_repo
@@ -34,6 +36,8 @@ from app.repositories import alert as alert_repo
 from app.repositories import company_update as company_update_repo
 
 from app.repositories import daily_stats as daily_stats_repo
+
+from app.repositories import openphone_thread_label as thread_label_repo
 
 __all__ = [
     "BaseRepository",
@@ -53,4 +57,5 @@ __all__ = [
     "alert_repo",
     "company_update_repo",
     "daily_stats_repo",
+    "thread_label_repo",
 ]

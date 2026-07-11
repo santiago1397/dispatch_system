@@ -1,5 +1,6 @@
 """Tests for service layer."""
 
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -263,6 +264,7 @@ def _make_message(
     content: str,
     from_number: str | None = "+17735551212",
     source: str = MessageSource.OPENPHONE.value,
+    raw_payload: dict | None = None,
 ) -> IncomingMessage:
     """Construct an in-memory IncomingMessage with the given fields."""
     return IncomingMessage(
@@ -276,7 +278,7 @@ def _make_message(
         status=None,
         event_type="message.received",
         phone_number_id=None,
-        raw_payload={},
+        raw_payload=raw_payload if raw_payload is not None else {},
     )
 
 
@@ -332,6 +334,25 @@ class TestPhoneAndAddressDetection:
 
     def test_is_job_message_rejects_empty(self):
         assert JobClassificationService._is_job_message("") is False
+
+
+class TestClosingChatMatchingKey:
+    """The looser closing-chat gate — a phone OR an address is enough,
+    since ``find_for_closing`` only needs one matching key."""
+
+    def test_has_matching_key_accepts_address_only(self):
+        content = "123 Main St, Chicago, IL 60601 - paid $600 cash"
+        assert JobClassificationService._has_matching_key(content) is True
+
+    def test_has_matching_key_accepts_phone_only(self):
+        content = "773-555-1212 paid $600 cash"
+        assert JobClassificationService._has_matching_key(content) is True
+
+    def test_has_matching_key_rejects_bare_ack(self):
+        assert JobClassificationService._has_matching_key("ok") is False
+
+    def test_has_matching_key_rejects_empty(self):
+        assert JobClassificationService._has_matching_key("") is False
 
 
 class TestAddressNormalizer:
@@ -519,6 +540,99 @@ class TestJobClassificationDedup:
         assert create_kwargs["duplicate_of"] is None
         update_kwargs = mock_dj_repo.update_dispatch_job.await_args.kwargs
         assert update_kwargs["classification_status"] == ClassificationStatus.CLASSIFIED.value
+
+    @pytest.mark.anyio
+    async def test_classify_message_uses_real_whatsapp_timestamp(
+        self, monkeypatch, mock_db_session
+    ):
+        """``first_message_at`` must come from the WhatsApp message's own
+        timestamp (``raw_payload.timestamp``), not from ``datetime.now()``.
+
+        A batch-scraped backlog is mirrored into ``incoming_messages`` long
+        after the message was actually sent; without this, every backfilled
+        job is misdated to "now", corrupting daily_stats/company-report/
+        alert-SLA anchors that key off ``first_message_at``.
+        """
+        company = _make_company(
+            identification_patterns=[{"patterns": [r"rekey", r"\d{3}-\d{3}-\d{4}"]}],
+        )
+        real_time = datetime(2026, 6, 24, 15, 17, tzinfo=UTC)
+        message = _make_message(
+            content="Rekey at 999 Oak Ave, Chicago, IL 60601. 773-555-1212.",
+            source=MessageSource.WHATSAPP.value,
+            raw_payload={
+                "wa_message_id": "abc",
+                "chat_jid": "123@g.us",
+                "timestamp": real_time.isoformat(),
+            },
+        )
+        pending_dj = MagicMock()
+        pending_dj.id = uuid4()
+        new_job = MagicMock(spec=Job)
+        new_job.id = uuid4()
+
+        _mock_extraction_llm(monkeypatch, address="999 Oak Ave, Chicago, IL 60601")
+
+        with (
+            patch("app.services.classification.company_repo") as mock_company_repo,
+            patch("app.services.classification.job_repo") as mock_job_repo,
+            patch("app.services.classification.dispatch_job_repo") as mock_dj_repo,
+        ):
+            mock_company_repo.get_by_phone_number = AsyncMock(return_value=None)
+            mock_company_repo.get_all_active = AsyncMock(return_value=[company])
+            mock_dj_repo.get_by_message_id = AsyncMock(return_value=None)
+            mock_dj_repo.create_dispatch_job = AsyncMock(return_value=pending_dj)
+            mock_dj_repo.update_dispatch_job = AsyncMock(return_value=pending_dj)
+            mock_job_repo.find_dedup_candidate = AsyncMock(return_value=(None, False))
+            mock_job_repo.create_job = AsyncMock(return_value=new_job)
+
+            svc = JobClassificationService(mock_db_session)
+            await svc.classify_message(message)
+
+        create_kwargs = mock_job_repo.create_job.await_args.kwargs
+        assert create_kwargs["first_message_at"] == real_time
+
+    @pytest.mark.anyio
+    async def test_classify_message_falls_back_to_now_without_raw_timestamp(
+        self, monkeypatch, mock_db_session
+    ):
+        """A WhatsApp row missing ``raw_payload.timestamp`` (or OpenPhone,
+        which never carries one) falls back to ``datetime.now(UTC)`` —
+        there's no better anchor."""
+        company = _make_company(
+            identification_patterns=[{"patterns": [r"rekey", r"\d{3}-\d{3}-\d{4}"]}],
+        )
+        message = _make_message(
+            content="Rekey at 999 Oak Ave, Chicago, IL 60601. 773-555-1212.",
+            source=MessageSource.WHATSAPP.value,
+        )
+        pending_dj = MagicMock()
+        pending_dj.id = uuid4()
+        new_job = MagicMock(spec=Job)
+        new_job.id = uuid4()
+
+        _mock_extraction_llm(monkeypatch, address="999 Oak Ave, Chicago, IL 60601")
+
+        before = datetime.now(UTC)
+        with (
+            patch("app.services.classification.company_repo") as mock_company_repo,
+            patch("app.services.classification.job_repo") as mock_job_repo,
+            patch("app.services.classification.dispatch_job_repo") as mock_dj_repo,
+        ):
+            mock_company_repo.get_by_phone_number = AsyncMock(return_value=None)
+            mock_company_repo.get_all_active = AsyncMock(return_value=[company])
+            mock_dj_repo.get_by_message_id = AsyncMock(return_value=None)
+            mock_dj_repo.create_dispatch_job = AsyncMock(return_value=pending_dj)
+            mock_dj_repo.update_dispatch_job = AsyncMock(return_value=pending_dj)
+            mock_job_repo.find_dedup_candidate = AsyncMock(return_value=(None, False))
+            mock_job_repo.create_job = AsyncMock(return_value=new_job)
+
+            svc = JobClassificationService(mock_db_session)
+            await svc.classify_message(message)
+        after = datetime.now(UTC)
+
+        create_kwargs = mock_job_repo.create_job.await_args.kwargs
+        assert before <= create_kwargs["first_message_at"] <= after
 
     @pytest.mark.anyio
     async def test_classify_message_outside_window(self, monkeypatch, mock_db_session):

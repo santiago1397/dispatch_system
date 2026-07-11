@@ -114,6 +114,86 @@ class TestTransitionHappyPath:
         assert kwargs["status"] == LifecycleStatus.IN_PROGRESS.value
 
 
+class TestTransitionRealTimestamp:
+    """``at=`` anchors the event/job update to the real message time.
+
+    Without this, a batch-imported WhatsApp backlog stamps every event
+    with processing time instead of when it actually happened, which
+    corrupts daily_stats/company-report/alert-SLA anchors. See
+    ``memory/`` discussion — ``LifecycleService.transition`` now accepts
+    an explicit ``at`` and every WhatsApp/OpenPhone call site passes the
+    message's own timestamp.
+    """
+
+    @pytest.mark.anyio
+    async def test_at_override_is_used_for_event_and_status_change(self):
+        from datetime import UTC, datetime
+
+        job = _make_job()
+        db = AsyncMock()
+        service = LifecycleService(db)
+
+        from app.repositories import (
+            alert as alert_repo,
+        )
+        from app.repositories import (
+            job as job_repo,
+        )
+        from app.repositories import (
+            job_lifecycle_event as lifecycle_event_repo,
+        )
+
+        event = MagicMock()
+        event.id = uuid4()
+        lifecycle_event_repo.create_event = AsyncMock(return_value=event)
+        job_repo.set_lifecycle_status = AsyncMock(return_value=job)
+        alert_repo.auto_resolve_for_job = AsyncMock(return_value=0)
+
+        real_time = datetime(2026, 6, 24, 15, 17, tzinfo=UTC)
+
+        await service.transition(
+            job=job,
+            to_status=LifecycleStatus.DISPATCHED,
+            source=LifecycleEventSource.OPERATOR_WHATSAPP,
+            payload={"chat_jid": "123@g.us"},
+            at=real_time,
+        )
+
+        assert lifecycle_event_repo.create_event.call_args.kwargs["at"] == real_time
+        assert job_repo.set_lifecycle_status.call_args.kwargs["when"] == real_time
+
+    @pytest.mark.anyio
+    async def test_missing_at_falls_back_to_now(self):
+        job = _make_job()
+        db = AsyncMock()
+        service = LifecycleService(db)
+
+        from app.repositories import (
+            alert as alert_repo,
+        )
+        from app.repositories import (
+            job as job_repo,
+        )
+        from app.repositories import (
+            job_lifecycle_event as lifecycle_event_repo,
+        )
+
+        event = MagicMock()
+        event.id = uuid4()
+        lifecycle_event_repo.create_event = AsyncMock(return_value=event)
+        job_repo.set_lifecycle_status = AsyncMock(return_value=job)
+        alert_repo.auto_resolve_for_job = AsyncMock(return_value=0)
+
+        await service.transition(
+            job=job,
+            to_status=LifecycleStatus.DISPATCHED,
+            source=LifecycleEventSource.OPERATOR_WHATSAPP,
+            payload={"chat_jid": "123@g.us"},
+        )
+
+        assert lifecycle_event_repo.create_event.call_args.kwargs["at"] is not None
+
+
 class TestStateMachineGuard:
     @pytest.mark.anyio
     async def test_manual_close_rejected(self):

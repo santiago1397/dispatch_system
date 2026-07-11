@@ -11,6 +11,7 @@ import {
   FileText,
   LayoutDashboard,
   MessagesSquare,
+  Phone,
   Settings,
   Users,
 } from "lucide-react";
@@ -26,6 +27,7 @@ const baseNavigation = [
   { name: "Stats", href: ROUTES.STATS, icon: BarChart3 },
   { name: "Reports", href: ROUTES.REPORTS, icon: FileText },
   { name: "WhatsApp", href: ROUTES.WHATSAPP, icon: MessagesSquare },
+  { name: "OpenPhone", href: ROUTES.OPENPHONE, icon: Phone },
 ];
 
 const adminNavigation = [

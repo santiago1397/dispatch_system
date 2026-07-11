@@ -29,3 +29,21 @@ export const SOURCE_LABEL: Record<MessageSource, string> = {
   openphone: "OpenPhone",
   whatsapp: "WhatsApp",
 };
+
+/**
+ * One row per OpenPhone conversation counterparty — derived server-side
+ * (no stored chat/thread id). Mirrors
+ * `backend/app/schemas/openphone.py::OpenPhoneThreadSummary`.
+ */
+export interface OpenPhoneThreadSummary {
+  counterparty: string;
+  last_content: string | null;
+  last_direction: string | null;
+  last_created_at: string;
+  message_count: number;
+}
+
+export interface OpenPhoneThreadList {
+  items: OpenPhoneThreadSummary[];
+  total: number;
+}

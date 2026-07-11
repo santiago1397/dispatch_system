@@ -2,13 +2,15 @@
 
 import logging
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.openphone import openphone_client
-from app.core.exceptions import BadRequestError, ExternalServiceError, NotFoundError
+from app.core.exceptions import BadRequestError, ExternalServiceError, NotFoundError, ValidationError
 from app.db.models.openphone import IncomingMessage
-from app.repositories import openphone_repo
+from app.db.models.openphone_thread_label import OpenPhoneThreadLabel
+from app.repositories import company_repo, openphone_repo, thread_label_repo
 from app.schemas.openphone import MessageWebhookPayload
 
 logger = logging.getLogger(__name__)
@@ -209,6 +211,7 @@ class OpenPhoneService:
                     "openphone_id": openphone_id,
                     "technician_id": str(technician.id),
                 },
+                at=message.created_at,
             )
         except Exception:
             logger.exception(
@@ -284,6 +287,7 @@ class OpenPhoneService:
                     "body_preview": body[:120],
                     "operator_msg_index": outbound_count,
                 },
+                at=reply_at,
             )
             logger.info(
                 "OP_REJECT_APPLIED openphone_id=%s job_id=%s counterparty=%s outbound=%d",
@@ -314,6 +318,117 @@ class OpenPhoneService:
         """List persisted incoming messages with total count."""
         messages = await openphone_repo.list_incoming_messages(self.db, skip=skip, limit=limit)
         total = await openphone_repo.count_incoming_messages(self.db)
+        return messages, total
+
+    async def list_threads(
+        self,
+        *,
+        phone_number_id: str | None = None,
+        skip: int = 0,
+        limit: int = 50,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """List OpenPhone conversation threads, most recently active first.
+
+        Enriched with each counterparty's ``OpenPhoneThreadLabel`` (company
+        reference and/or free-text label) in one bulk lookup — display-only,
+        never affects classification.
+        """
+        threads = await openphone_repo.list_threads(
+            self.db, phone_number_id=phone_number_id, skip=skip, limit=limit
+        )
+        total = await openphone_repo.count_threads(self.db, phone_number_id=phone_number_id)
+
+        labels = await thread_label_repo.get_by_counterparties(
+            self.db, [t.counterparty for t in threads]
+        )
+        enriched = [
+            self._merge_thread_label(t, labels.get(t.counterparty)) for t in threads
+        ]
+        return enriched, total
+
+    @staticmethod
+    def _merge_thread_label(
+        thread_row: Any,
+        label: OpenPhoneThreadLabel | None,
+    ) -> dict[str, Any]:
+        """Combine a raw thread row with its (optional) label row."""
+        company = label.company if label is not None else None
+        return {
+            "counterparty": thread_row.counterparty,
+            "last_content": thread_row.last_content,
+            "last_direction": thread_row.last_direction,
+            "last_created_at": thread_row.last_created_at,
+            "message_count": thread_row.message_count,
+            "company_id": company.id if company is not None else None,
+            "company_name": company.name if company is not None else None,
+            "company_display_name": company.display_name if company is not None else None,
+            "label": label.label if label is not None else None,
+        }
+
+    async def upsert_thread_label(
+        self,
+        *,
+        counterparty: str,
+        company_id: UUID | None,
+        label: str | None,
+        created_by_user_id: UUID | None,
+    ) -> OpenPhoneThreadLabel:
+        """Set the company reference and/or free-text label for a thread.
+
+        Display-only — never touches ``company_phone_bindings`` or the
+        classification pipeline. Raises ``ValidationError`` if both fields
+        are empty (use the DELETE endpoint to clear a label) and
+        ``NotFoundError`` if ``company_id`` doesn't reference a real company.
+        """
+        normalized_label = (label or "").strip() or None
+        if company_id is None and normalized_label is None:
+            raise ValidationError(
+                message="At least one of company_id or label must be set.",
+            )
+        if company_id is not None:
+            company = await company_repo.get_by_id(self.db, company_id)
+            if company is None:
+                raise NotFoundError(message="Company not found", details={"company_id": str(company_id)})
+
+        return await thread_label_repo.upsert(
+            self.db,
+            counterparty=counterparty,
+            company_id=company_id,
+            label=normalized_label,
+            created_by_user_id=created_by_user_id,
+        )
+
+    async def delete_thread_label(self, counterparty: str) -> None:
+        """Clear the company reference/label for a thread. No-op if unset."""
+        await thread_label_repo.delete(self.db, counterparty)
+
+    async def list_thread_messages(
+        self,
+        *,
+        counterparty: str,
+        phone_number_id: str | None = None,
+        since=None,
+        until=None,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> tuple[list[IncomingMessage], int]:
+        """List OpenPhone messages exchanged with ``counterparty``, with total count."""
+        messages = await openphone_repo.list_thread_messages(
+            self.db,
+            counterparty=counterparty,
+            phone_number_id=phone_number_id,
+            since=since,
+            until=until,
+            skip=skip,
+            limit=limit,
+        )
+        total = await openphone_repo.count_thread_messages(
+            self.db,
+            counterparty=counterparty,
+            phone_number_id=phone_number_id,
+            since=since,
+            until=until,
+        )
         return messages, total
 
     # === Quo API Proxy Methods ===

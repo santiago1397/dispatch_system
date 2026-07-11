@@ -193,3 +193,56 @@ class IncomingMessageList(BaseSchema):
 
     items: list[IncomingMessageRead]
     total: int
+
+
+# =============================================================================
+# Conversation Thread Schemas (derived from incoming_messages, not Quo's API)
+# =============================================================================
+
+
+class OpenPhoneThreadSummary(BaseSchema):
+    """One row per OpenPhone conversation counterparty.
+
+    ``counterparty`` is derived, not a stored column — see
+    ``app/repositories/openphone.py:_COUNTERPARTY_EXPR``. The
+    ``company_*``/``label`` fields are display-only, sourced from
+    ``OpenPhoneThreadLabel`` — they never affect classification.
+    """
+
+    counterparty: str
+    last_content: str | None = None
+    last_direction: str | None = None
+    last_created_at: datetime
+    message_count: int
+    company_id: UUID | None = None
+    company_name: str | None = None
+    company_display_name: str | None = None
+    label: str | None = None
+
+
+class OpenPhoneThreadList(BaseSchema):
+    """Schema for listing OpenPhone conversation threads."""
+
+    items: list[OpenPhoneThreadSummary]
+    total: int
+
+
+class OpenPhoneThreadLabelUpsert(BaseSchema):
+    """Request body to set a thread's company reference and/or free-text label.
+
+    At least one of ``company_id``/``label`` must be non-null — clearing
+    both is what ``DELETE .../label`` is for.
+    """
+
+    company_id: UUID | None = None
+    label: str | None = None
+
+
+class OpenPhoneThreadLabelRead(BaseSchema, TimestampSchema):
+    """Schema for reading a thread label."""
+
+    counterparty: str
+    company_id: UUID | None = None
+    company_name: str | None = None
+    company_display_name: str | None = None
+    label: str | None = None

@@ -21,6 +21,7 @@ from app.db.models.job_lifecycle_event import (
 from app.db.models.alert import Alert, AlertKind
 from app.db.models.company_update import CompanyUpdate
 from app.db.models.daily_stats import DailyStatsSnapshot, StatsScope
+from app.db.models.openphone_thread_label import OpenPhoneThreadLabel
 
 __all__ = [
     "AppSettings",
@@ -48,4 +49,5 @@ __all__ = [
     "CompanyUpdate",
     "DailyStatsSnapshot",
     "StatsScope",
+    "OpenPhoneThreadLabel",
 ]

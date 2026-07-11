@@ -41,6 +41,11 @@ export const API_ROUTES = {
   // Incoming messages (source record behind every dispatch job)
   INCOMING_MESSAGE: (id: string) => `/openphone/incoming/${id}`,
 
+  // OpenPhone conversation threads (chat-style browser, read-only)
+  OPENPHONE_THREADS: "/openphone/threads",
+  OPENPHONE_THREAD_MESSAGES: (counterparty: string) =>
+    `/openphone/threads/${encodeURIComponent(counterparty)}/messages`,
+
   // Application settings (admin only)
   SETTINGS_LLM: "/settings/llm",
 
@@ -77,6 +82,7 @@ export const ROUTES = {
   DASHBOARD: "/dashboard",
   JOBS: "/jobs",
   WHATSAPP: "/whatsapp",
+  OPENPHONE: "/openphone",
   PROFILE: "/profile",
   SETTINGS: "/settings",
   ALERTS: "/alerts",

@@ -107,6 +107,26 @@ def _clean_for_match(content: str) -> str:
     return s.strip()
 
 
+def _message_timestamp(message: IncomingMessage) -> datetime | None:
+    """Real send time of ``message``, when known — not when we processed it.
+
+    WhatsApp messages carry the DOM-scraped timestamp in
+    ``raw_payload.timestamp`` (see ``whatsapp.py:ingest_batch``); a batch
+    scrape can mirror a message hours or days after it was actually sent,
+    so ``message.created_at`` is a poor proxy for "when did this job come
+    in". OpenPhone messages have no such field — ``created_at`` there is
+    already close to real-time (webhook delivery), so ``None`` is fine.
+    """
+    raw = (message.raw_payload or {}) if message.raw_payload else {}
+    raw_ts = raw.get("timestamp")
+    if not raw_ts:
+        return None
+    try:
+        return datetime.fromisoformat(raw_ts)
+    except (TypeError, ValueError):
+        return None
+
+
 class JobClassificationService:
     """Hybrid regex + AI classification with cross-message dedup."""
 
@@ -167,18 +187,36 @@ class JobClassificationService:
         # Closing-pipeline branch. Messages from the "Dispatch closing"
         # WhatsApp group carry payment/closing info for jobs that were
         # already classified from other tracked chats — they must skip
-        # the phone+address job-detection gate (a closing note rarely
-        # restates the address) and run the closing-specific extractor
-        # + matcher instead.
+        # the strict phone+address job-detection gate (a closing note
+        # rarely restates the full address) and run the closing-specific
+        # extractor + matcher instead. They still need *some* matching key
+        # (a phone or an address) to have any chance of finding the
+        # original job — a bare "ok"/"thanks" has neither, so route those
+        # to NOT_A_JOB instead of burning an AI extraction call just to
+        # land on CLOSING_UNMATCHED.
         chat_jid = (message.raw_payload or {}).get("chat_jid")
         if getattr(message, "source", None) == "whatsapp" and chat_jid == CLOSING_CHAT_JID:
+            if not self._has_matching_key(match_content):
+                logger.info(
+                    "CLASSIFY_STAGE batch_id=%s stage=not_a_job reason=closing_no_phone_or_address "
+                    "job_id=%s",
+                    batch_id,
+                    job.id,
+                )
+                return await self._update_status(
+                    job,
+                    ClassificationStatus.NOT_A_JOB,
+                    error="Closing chat message has no phone or address to match",
+                )
             logger.info(
                 "CLASSIFY_STAGE batch_id=%s stage=closing_branch chat_jid=%s job_id=%s",
                 batch_id,
                 chat_jid,
                 job.id,
             )
-            return await self._process_closing_message(job, match_content, batch_id)
+            return await self._process_closing_message(
+                job, match_content, batch_id, at=_message_timestamp(message)
+            )
 
         if not content.strip():
             logger.info(
@@ -347,7 +385,7 @@ class JobClassificationService:
         new_job = await job_repo.create_job(
             self.db,
             company_id=company.id,
-            first_message_at=datetime.now(UTC),
+            first_message_at=_message_timestamp(message) or datetime.now(UTC),
             address_street_number=normalized.street_number,
             address_street_name=normalized.street_name,
             address_city=normalized.city,
@@ -377,6 +415,19 @@ class JobClassificationService:
         has_phone = bool(PHONE_PATTERN.search(content))
         if not has_phone:
             return False
+        return any(p.search(content) for p in ADDRESS_PATTERNS)
+
+    @staticmethod
+    def _has_matching_key(content: str) -> bool:
+        """Check if message contains a phone number OR an address.
+
+        Looser than ``_is_job_message`` (which requires both) — used to
+        gate the closing-chat branch, where ``find_for_closing`` only
+        needs one matching key (address OR phone) to locate the original
+        Job, not both.
+        """
+        if PHONE_PATTERN.search(content):
+            return True
         return any(p.search(content) for p in ADDRESS_PATTERNS)
 
     async def _classify_company_regex(self, content: str) -> Company | None:
@@ -536,8 +587,14 @@ class JobClassificationService:
         job: DispatchJob,
         match_content: str,
         batch_id: str,
+        *,
+        at: datetime | None = None,
     ) -> DispatchJob:
         """Closing-message pipeline.
+
+        ``at`` is the closing message's real send time (WhatsApp only),
+        used to stamp ``closed_at``/the lifecycle event instead of
+        processing time — see ``_message_timestamp``.
 
         1. Run the same regex/AI company classifier on the closing body.
            Phone lookup is skipped because the WhatsApp ``from_number``
@@ -660,7 +717,7 @@ class JobClassificationService:
             closed_tip=extraction.tip,
             closed_payment_method=extraction.payment_method,
             closed_notes=extraction.notes,
-            closed_at=datetime.now(UTC),
+            closed_at=at or datetime.now(UTC),
             closed_from_dispatch_job_id=job.id,
         )
         await dispatch_job_repo.update_dispatch_job(
@@ -689,6 +746,7 @@ class JobClassificationService:
                     "closed_payment_method": extraction.payment_method,
                     "dispatch_job_id": str(job.id),
                 },
+                at=at,
             )
         except Exception:
             logger.exception(

@@ -1,0 +1,42 @@
+import { NextRequest, NextResponse } from "next/server";
+import { backendFetch, BackendApiError } from "@/lib/server-api";
+import type { IncomingMessage } from "@/types";
+
+interface RouteContext {
+  params: Promise<{ counterparty: string }>;
+}
+
+export async function GET(request: NextRequest, context: RouteContext) {
+  try {
+    const accessToken = request.cookies.get("access_token")?.value;
+    if (!accessToken) {
+      return NextResponse.json({ detail: "Not authenticated" }, { status: 401 });
+    }
+
+    const { counterparty } = await context.params;
+
+    const sp = request.nextUrl.searchParams;
+    const params = new URLSearchParams();
+    for (const key of ["phone_number_id", "since", "until", "skip", "limit"]) {
+      const v = sp.get(key);
+      if (v) params.set(key, v);
+    }
+
+    const qs = params.toString();
+    const path = `/api/v1/openphone/threads/${encodeURIComponent(counterparty)}/messages${qs ? `?${qs}` : ""}`;
+
+    const data = await backendFetch<{ items: IncomingMessage[]; total: number }>(path, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    return NextResponse.json(data);
+  } catch (error) {
+    if (error instanceof BackendApiError) {
+      return NextResponse.json(
+        { detail: error.message || "Failed to fetch messages" },
+        { status: error.status }
+      );
+    }
+    return NextResponse.json({ detail: "Internal server error" }, { status: 500 });
+  }
+}

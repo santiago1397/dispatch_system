@@ -205,6 +205,7 @@ class WhatsappService:
                                 "sender_name": getattr(msg, "sender_name", None),
                                 "batch_id": batch_id,
                             },
+                            at=getattr(msg, "timestamp", None),
                         )
                     except Exception:
                         logger.exception(
@@ -272,6 +273,9 @@ class WhatsappService:
                             "chat_jid": getattr(msg, "chat_jid", None),
                             "sender_name": getattr(msg, "sender_name", None),
                             "batch_id": batch_id,
+                            "timestamp": (
+                                ts.isoformat() if (ts := getattr(msg, "timestamp", None)) else None
+                            ),
                         },
                         source=MessageSource.WHATSAPP.value,
                     )
@@ -495,6 +499,7 @@ class WhatsappService:
                 to_status="dispatched",
                 source=LifecycleEventSource.OPERATOR_WHATSAPP,
                 payload=payload,
+                at=getattr(msg, "timestamp", None),
             )
         except Exception:
             logger.exception(
@@ -634,6 +639,7 @@ class WhatsappService:
                 "operator_msg_index": operator_msg_count,
                 "batch_id": batch_id,
             },
+            at=timestamp,
         )
         logger.info(
             "REJECT_APPLIED batch_id=%s chat_jid=%s job_id=%s wa_message_id=%s operator_msgs=%d",

@@ -314,6 +314,74 @@ class TestIngestBatch:
         assert result.skipped == 1
         assert len(result.errors) == 0
 
+    @pytest.mark.anyio
+    async def test_mirrored_incoming_message_carries_real_timestamp(self):
+        """The real WhatsApp send time must survive into ``incoming_messages``.
+
+        Without this, ``IncomingMessage.created_at`` (ingestion time) is
+        the only timestamp available downstream, which breaks
+        ``first_message_at``/lifecycle-event anchoring whenever the
+        extension mirrors a backlog batch long after the messages were
+        actually sent. See ``app/services/classification.py:_message_timestamp``.
+        """
+        from unittest.mock import MagicMock
+
+        db = MagicMock()
+        chat = WhatsappTrackedChat(chat_jid="tracked@g.us", display_name="T")
+        chat.is_active = True
+        chat.chat_role = "other"
+        chat_result = MagicMock()
+        chat_result.scalar_one_or_none = MagicMock(return_value=chat)
+        db.execute = AsyncMock(return_value=chat_result)
+        db.flush = AsyncMock()
+        db.commit = AsyncMock()
+
+        fake_bulk = MagicMock()
+        fake_bulk.inserted = 1
+        fake_bulk.updated = 0
+        fake_bulk.skipped = 0
+        fake_bulk.deduplicated = 0
+
+        real_time = datetime(2026, 6, 24, 15, 17, tzinfo=UTC)
+        service = WhatsappService(db)
+        payload = WhatsappMessageBatchIngest(
+            messages=[
+                WhatsappMessageCreate(
+                    wa_message_id="m1",
+                    chat_jid="tracked@g.us",
+                    timestamp=real_time,
+                    body="123 Main St, Chicago, IL 60601",
+                )
+            ]
+        )
+
+        created = MagicMock()
+        created.id = "incoming-1"
+
+        with (
+            patch(
+                "app.services.whatsapp.whatsapp_repo.batch_upsert_messages",
+                new=AsyncMock(return_value=fake_bulk),
+            ),
+            patch(
+                "app.services.whatsapp.whatsapp_repo.update_chat_last_seen",
+                new=AsyncMock(),
+            ),
+            patch(
+                "app.services.closing_signal.ClosingSignalService.detect_and_complete",
+                new=AsyncMock(return_value=False),
+            ),
+            patch(
+                "app.services.whatsapp.openphone_repo.create_incoming_message",
+                new=AsyncMock(return_value=created),
+            ) as create_incoming,
+            patch.object(WhatsappService, "_classify_in_background", new=AsyncMock()),
+        ):
+            await service.ingest_batch(payload, batch_id="b1")
+
+        raw_payload = create_incoming.call_args.kwargs["raw_payload"]
+        assert raw_payload["timestamp"] == real_time.isoformat()
+
 
 # =============================================================================
 # Routes: HTTP-level tests with the FastAPI app

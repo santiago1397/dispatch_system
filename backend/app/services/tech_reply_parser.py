@@ -205,6 +205,7 @@ async def parse_tech_reply(
             to_status=target_status,
             source=LifecycleEventSource.TECH_WHATSAPP,
             payload=payload,
+            at=wa_message.timestamp,
         )
     except Exception:
         logger.exception(
@@ -406,6 +407,7 @@ async def parse_openphone_tech_reply(
             to_status=target_status,
             source=LifecycleEventSource.TECH_OPENPHONE,
             payload=payload,
+            at=incoming_message.created_at,
         )
     except Exception:
         logger.exception(
@@ -647,9 +649,7 @@ async def _relay_company_update(db: AsyncSession, *, job, intent, event_id) -> N
             notes=intent.notes,
         )
     except Exception:
-        logger.exception(
-            "COMPANY_UPDATE_FAILED job_id=%s kind=%s", job.id, intent.intent
-        )
+        logger.exception("COMPANY_UPDATE_FAILED job_id=%s kind=%s", job.id, intent.intent)
 
 
 async def _apply_tech_decision_whatsapp(
@@ -706,11 +706,10 @@ async def _apply_tech_decision_whatsapp(
             to_status=target_status,
             source=LifecycleEventSource.TECH_WHATSAPP,
             payload=payload,
+            at=wa_message.timestamp,
         )
     except Exception:
-        logger.exception(
-            "TECH_DECISION_TRANSITION_FAILED job_id=%s intent=%s", job.id, intent_code
-        )
+        logger.exception("TECH_DECISION_TRANSITION_FAILED job_id=%s intent=%s", job.id, intent_code)
         return "tech_whatsapp", intent_code
 
     # Stamp the mirror IncomingMessage with the event it triggered.
@@ -790,6 +789,7 @@ async def _apply_tech_decision_openphone(
             to_status=target_status,
             source=LifecycleEventSource.TECH_OPENPHONE,
             payload=payload,
+            at=incoming_message.created_at,
         )
     except Exception:
         logger.exception(

@@ -1,6 +1,8 @@
 export { useAuth } from "./use-auth";
 export { useTrackedChats, useUpdateTrackedChat } from "./use-tracked-chats";
 export { useWhatsappMessages } from "./use-whatsapp-messages";
+export { useOpenPhoneThreads } from "./use-openphone-threads";
+export { useOpenPhoneThreadMessages } from "./use-openphone-messages";
 export {
   useDispatchJobs,
   useDispatchJob,

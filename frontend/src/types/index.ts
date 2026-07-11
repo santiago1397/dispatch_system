@@ -12,3 +12,4 @@ export * from "./technician";
 export * from "./alert";
 export * from "./stats";
 export * from "./settings";
+export * from "./company-report";

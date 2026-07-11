@@ -3,7 +3,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -504,6 +504,67 @@ async def get_alert_job_summaries(
             "message_source": message.source if message is not None else None,
         }
     return summaries
+
+
+async def get_company_status_breakdown(
+    db: AsyncSession,
+    *,
+    start: datetime,
+    end: datetime,
+) -> list[tuple[uuid.UUID, str, int]]:
+    """Bucket every Job whose ``first_message_at`` falls in ``[start, end)``
+    into one of 5 outcome buckets, grouped by company.
+
+    A job is anchored to the day it *arrived*, not the day its status last
+    changed — so a job that arrives on day X and closes 3 days later still
+    counts toward day X, just in the ``closed_completed`` bucket instead of
+    ``still_open``.
+
+    Buckets (evaluated in order, first match wins):
+    - ``rejected`` — ``lifecycle_status == 'rejected'``.
+    - ``closed_completed`` — ``lifecycle_status`` in ``('closed', 'completed')``.
+      Deliberately merged: the system elsewhere distinguishes a tech's
+      "done" (``completed``) from the operator's authoritative filing
+      (``closed``, see ``closing_unfiled`` alert), but this report reports
+      them as one bucket per product decision.
+    - ``scheduled_another_day`` — ``lifecycle_status == 'appt_set'`` AND the
+      appointment's calendar day differs from the job's arrival day. A
+      same-day appointment does NOT count here — it falls through to
+      ``still_open``.
+    - ``canceled`` — ``lifecycle_status == 'canceled'``.
+    - ``still_open`` — everything else (pending, dispatched, accepted,
+      in_progress, needs_follow_up, and same-day appt_set).
+
+    Returns ``(company_id, bucket, count)`` rows. Jobs with no company
+    match (``company_id IS NULL``) are excluded — they never reached
+    classification and have no company to report against.
+    """
+    bucket = case(
+        (Job.lifecycle_status == "rejected", "rejected"),
+        (Job.lifecycle_status.in_(["closed", "completed"]), "closed_completed"),
+        (
+            and_(
+                Job.lifecycle_status == "appt_set",
+                Job.appt_at.is_not(None),
+                func.date_trunc("day", Job.appt_at) != func.date_trunc("day", Job.first_message_at),
+            ),
+            "scheduled_another_day",
+        ),
+        (Job.lifecycle_status == "canceled", "canceled"),
+        else_="still_open",
+    ).label("bucket")
+
+    query = (
+        select(Job.company_id, bucket, func.count().label("count"))
+        .where(
+            Job.company_id.is_not(None),
+            Job.first_message_at >= start,
+            Job.first_message_at < end,
+        )
+        .group_by(Job.company_id, bucket)
+    )
+    result = await db.execute(query)
+    return [(row.company_id, row.bucket, row.count) for row in result.all()]
 
 
 async def search_job_ids_by_message(db: AsyncSession, search: str) -> list[uuid.UUID]:

@@ -18,6 +18,7 @@ from app.api.routes.v1 import app_settings
 from app.api.routes.v1 import technicians
 from app.api.routes.v1 import alerts
 from app.api.routes.v1 import stats
+from app.api.routes.v1 import reports
 
 v1_router = APIRouter()
 
@@ -71,3 +72,7 @@ v1_router.include_router(alerts.router, prefix="/alerts", tags=["alerts"])
 # Daily stats — pre-computed rollups written by the daily-stats service.
 # The router exposes read + CSV/JSON export for the /stats page.
 v1_router.include_router(stats.router, prefix="/stats", tags=["stats"])
+
+# Live per-company job-status report — computed on every request, no
+# snapshot table, so "today" is always current. Backs the /reports page.
+v1_router.include_router(reports.router, prefix="/reports", tags=["reports"])

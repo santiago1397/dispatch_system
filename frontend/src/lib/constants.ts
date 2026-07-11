@@ -65,6 +65,9 @@ export const API_ROUTES = {
   // Daily stats — pre-computed rollups + CSV/JSON export.
   STATS: "/stats",
   STATS_EXPORT: "/stats/export",
+
+  // Live per-company job status report — computed on every call.
+  REPORTS_COMPANY_STATUS: "/reports/company-status",
 } as const;
 
 // Navigation routes
@@ -78,6 +81,7 @@ export const ROUTES = {
   SETTINGS: "/settings",
   ALERTS: "/alerts",
   STATS: "/stats",
+  REPORTS: "/reports",
   CHAT_ROLES: "/dispatch/chat-roles",
   TECHNICIANS: "/technicians",
 } as const;

@@ -27,3 +27,4 @@ export {
 } from "./use-technicians";
 export { useAlerts, useAlert, useResolveAlert } from "./use-alerts";
 export { useDailyStats, useExportStats } from "./use-stats";
+export { useCompanyReport } from "./use-company-report";

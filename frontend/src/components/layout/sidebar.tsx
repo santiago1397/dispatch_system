@@ -8,6 +8,7 @@ import {
   AlertTriangle,
   BarChart3,
   ClipboardList,
+  FileText,
   LayoutDashboard,
   MessagesSquare,
   Settings,
@@ -23,6 +24,7 @@ const baseNavigation = [
   { name: "Jobs", href: ROUTES.JOBS, icon: ClipboardList },
   { name: "Alerts", href: ROUTES.ALERTS, icon: AlertTriangle, badge: AlertsSidebarBadge },
   { name: "Stats", href: ROUTES.STATS, icon: BarChart3 },
+  { name: "Reports", href: ROUTES.REPORTS, icon: FileText },
   { name: "WhatsApp", href: ROUTES.WHATSAPP, icon: MessagesSquare },
 ];
 

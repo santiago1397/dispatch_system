@@ -118,6 +118,34 @@ def test_signal_without_job_body_only_checks_phrases() -> None:
     assert reject_detector.is_reject_signal(reply, None) is False
 
 
+@pytest.mark.parametrize(
+    "note",
+    [
+        "Comment: K?\n\nIt says the wrong number pls check",
+        "K?",
+        "is this the right address?",
+        "pls confirm the phone number",
+        "can you verify the address",
+        "correct number?",
+    ],
+)
+def test_repaste_with_data_question_is_not_reject(note: str) -> None:
+    # A re-paste + a data-quality question ("wrong number, pls check") is
+    # NOT a decline — the operator is flagging bad info, not passing on
+    # the job. Regression test for a job wrongly marked `rejected` when
+    # the customer simply hadn't answered yet.
+    reply = JOB_BODY + "\n" + note
+    assert reject_detector.is_repaste_with_note(reply, JOB_BODY) is False
+    assert reject_detector.is_reject_signal(reply, JOB_BODY) is False
+
+
+def test_repaste_with_genuine_decline_note_still_rejects() -> None:
+    # Guard against the data-question veto swallowing real declines.
+    reply = JOB_BODY + "\npass, too far for us today"
+    assert reject_detector.is_repaste_with_note(reply, JOB_BODY) is True
+    assert reject_detector.is_reject_signal(reply, JOB_BODY) is True
+
+
 # ---------------------------------------------------------------------------
 # Orchestration: WhatsappService._maybe_reject_job
 # ---------------------------------------------------------------------------
@@ -196,9 +224,7 @@ async def test_maybe_reject_no_candidate() -> None:
         patch("app.services.lifecycle.LifecycleService") as ls_cls,
     ):
         ls_cls.return_value.transition = AsyncMock()
-        result = await svc._maybe_reject_job(
-            _msg("pass", ts=datetime.now(UTC)), batch_id="b1"
-        )
+        result = await svc._maybe_reject_job(_msg("pass", ts=datetime.now(UTC)), batch_id="b1")
     assert result is False
     ls_cls.return_value.transition.assert_not_awaited()
 
@@ -216,9 +242,7 @@ async def test_maybe_reject_not_a_reject_message() -> None:
         patch("app.services.lifecycle.LifecycleService") as ls_cls,
     ):
         ls_cls.return_value.transition = AsyncMock()
-        result = await svc._maybe_reject_job(
-            _msg("on my way", ts=now), batch_id="b1"
-        )
+        result = await svc._maybe_reject_job(_msg("on my way", ts=now), batch_id="b1")
     assert result is False
     ls_cls.return_value.transition.assert_not_awaited()
 

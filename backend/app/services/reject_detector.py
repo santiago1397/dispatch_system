@@ -76,12 +76,12 @@ _REJECT_PREFIX_MAX_TOKENS = 12
 # a natural-language decline ("sorry we have no one for now", "no one
 # available at the moment"). Only matched when the message is short.
 _REJECT_KEYWORD_PATTERNS: list = [
-    re.compile(r"\bno\s+one\b", re.IGNORECASE),          # "no one for now", "no one available"
+    re.compile(r"\bno\s+one\b", re.IGNORECASE),  # "no one for now", "no one available"
     re.compile(r"\bnobody\s+available\b", re.IGNORECASE),
     re.compile(r"\bno\s+techs?\s+available\b", re.IGNORECASE),
     re.compile(r"\bno\s+one\s+available\b", re.IGNORECASE),
     re.compile(r"\bnot\s+available\b", re.IGNORECASE),
-    re.compile(r"\bsorry\b.{0,40}\bno\b", re.IGNORECASE),   # "sorry, we have no..."
+    re.compile(r"\bsorry\b.{0,40}\bno\b", re.IGNORECASE),  # "sorry, we have no..."
 ]
 _REJECT_KEYWORD_MAX_TOKENS = 12
 
@@ -96,6 +96,26 @@ _REPASTE_MIN_JOB_CHARS = 25
 
 _PUNCT_STRIP_RE = re.compile(r"[.,!?;:¡¿*_\-\"'`]+")
 _WS_RE = re.compile(r"\s+")
+
+# A re-paste's appended note that reads as a question or a data-correction
+# flag ("K?", "wrong number, pls check") is NOT a decline — the operator is
+# telling the source chat that a field looks wrong, not passing on the job.
+# Matched against the *raw* body (before punctuation is stripped) so "?"
+# survives; a genuine decline reason ("too far", "no parts") never trips
+# this, so it doesn't affect the existing reject path.
+_DATA_QUESTION_RE = re.compile(
+    r"\?"
+    r"|\bwrong\s+(?:number|address|phone|info)\b"
+    r"|\bcorrect\s+(?:number|address|phone)\b"
+    r"|\b(?:check|confirm|verify)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_data_question(body: str) -> bool:
+    """True if ``body`` reads as a question / data-correction request
+    rather than a job decline (see :data:`_DATA_QUESTION_RE`)."""
+    return bool(_DATA_QUESTION_RE.search(body))
 
 
 def _normalize(text: str) -> str:
@@ -165,6 +185,11 @@ def is_repaste_with_note(body: str, job_body: str) -> bool:
        and the extra text (the note) is short.
     2. Similarity — the reply is highly similar to the job body and is at
        least as long as it (i.e. it re-pastes then appends).
+
+    Either path is vetoed when the note itself reads as a question or a
+    data-correction request (see :func:`_looks_like_data_question`) rather
+    than an actual decline — an operator flagging "wrong number, pls
+    check" back to the source chat is not passing on the job.
     """
     job_norm = _normalize(job_body)
     reply_norm = _normalize(body)
@@ -177,11 +202,15 @@ def is_repaste_with_note(body: str, job_body: str) -> bool:
 
     if job_norm in reply_norm:
         extra = len(reply_norm) - len(job_norm)
-        return 0 < extra <= _REPASTE_NOTE_MAX_CHARS
+        if not (0 < extra <= _REPASTE_NOTE_MAX_CHARS):
+            return False
+        return not _looks_like_data_question(body)
 
     if len(reply_norm) >= len(job_norm):
         ratio = SequenceMatcher(None, job_norm, reply_norm).ratio()
-        return ratio >= _REPASTE_SIMILARITY_THRESHOLD
+        if ratio < _REPASTE_SIMILARITY_THRESHOLD:
+            return False
+        return not _looks_like_data_question(body)
     return False
 
 

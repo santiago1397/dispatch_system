@@ -81,10 +81,14 @@ const BUCKET_COLUMNS: {
   { key: "rejected", label: "Rejected" },
 ];
 
+const BUCKET_LABEL: Record<CompanyReportBucket, string> = Object.fromEntries(
+  BUCKET_COLUMNS.map((c) => [c.key, c.label])
+) as Record<CompanyReportBucket, string>;
+
 interface DrillDown {
   companyId: string;
   companyName: string;
-  bucket: CompanyReportBucket;
+  bucket: CompanyReportBucket | "total";
   bucketLabel: string;
 }
 
@@ -243,7 +247,24 @@ export default function ReportsPage() {
                     </td>
                   ))}
                   <td className="px-3 py-2 text-right font-semibold tabular-nums">
-                    {row.total}
+                    {row.total > 0 ? (
+                      <button
+                        onClick={() =>
+                          setDrillDown({
+                            companyId: row.company_id,
+                            companyName: row.company_name,
+                            bucket: "total",
+                            bucketLabel: "All jobs",
+                          })
+                        }
+                        className="hover:text-primary underline decoration-dotted underline-offset-2"
+                        title={`View all jobs for ${row.company_name}`}
+                      >
+                        {row.total}
+                      </button>
+                    ) : (
+                      row.total
+                    )}
                   </td>
                 </tr>
               ))}
@@ -295,7 +316,7 @@ function DrillDownJobs({
   endDate,
 }: {
   companyId: string;
-  bucket: CompanyReportBucket;
+  bucket: CompanyReportBucket | "total";
   startDate: string;
   endDate: string;
 }) {
@@ -328,9 +349,16 @@ function DrillDownJobs({
             <li key={job.job_id} className="rounded-md border p-3 text-xs">
               <div className="flex items-center justify-between gap-2">
                 <span className="font-medium">{job.address ?? "No address"}</span>
-                <span className="bg-muted rounded px-1.5 py-0.5 font-mono text-[10px] uppercase">
-                  {job.lifecycle_status}
-                </span>
+                <div className="flex shrink-0 gap-1">
+                  {bucket === "total" ? (
+                    <span className="bg-muted rounded px-1.5 py-0.5 font-mono text-[10px] uppercase">
+                      {BUCKET_LABEL[job.bucket]}
+                    </span>
+                  ) : null}
+                  <span className="bg-muted rounded px-1.5 py-0.5 font-mono text-[10px] uppercase">
+                    {job.lifecycle_status}
+                  </span>
+                </div>
               </div>
               <div className="text-muted-foreground mt-1 flex flex-wrap gap-x-3 gap-y-1">
                 <span>Arrived {new Date(job.first_message_at).toLocaleString()}</span>

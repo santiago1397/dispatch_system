@@ -32,6 +32,7 @@ export type CompanyReportBucket = Exclude<
 export interface CompanyReportJobRow {
   job_id: string;
   dispatch_job_id: string | null;
+  bucket: CompanyReportBucket;
   lifecycle_status: string;
   first_message_at: string;
   appt_at: string | null;
@@ -47,6 +48,7 @@ export interface CompanyReportJobsResponse {
   end_date: string;
   company_id: string;
   company_name: string;
-  bucket: CompanyReportBucket;
+  /** One of ``CompanyReportBucket``, or ``"total"`` for the unfiltered "Total" column. */
+  bucket: CompanyReportBucket | "total";
   items: CompanyReportJobRow[];
 }

@@ -597,30 +597,39 @@ async def get_company_status_jobs(
     start: datetime,
     end: datetime,
     company_id: uuid.UUID,
-    bucket: str,
+    bucket: str | None = None,
 ) -> list[dict]:
-    """Detail rows behind one cell of ``get_company_status_breakdown``.
+    """Detail rows behind one cell (or the whole row) of
+    ``get_company_status_breakdown``.
 
     Uses the exact same ``_status_bucket_case`` classification, filtered
-    down to a single company + bucket, so operators can audit *which* jobs
-    landed in a bucket instead of trusting the count alone. Ordered by
-    ``first_message_at`` descending (most recent arrivals first), capped at
-    ``_JOB_DETAIL_LIMIT`` rows.
+    down to a single company, so operators can audit *which* jobs landed in
+    a bucket instead of trusting the count alone. Pass ``bucket=None`` for
+    the "Total" column — every job for the company in range, regardless of
+    bucket. Ordered by ``first_message_at`` ascending (the order jobs
+    actually arrived), capped at ``_JOB_DETAIL_LIMIT`` rows.
     """
+    bucket_expr = _status_bucket_case().label("bucket")
+    conditions = [
+        Job.company_id == company_id,
+        Job.first_message_at >= start,
+        Job.first_message_at < end,
+    ]
+    if bucket is not None:
+        conditions.append(_status_bucket_case() == bucket)
+
     jobs_q = (
-        select(Job)
-        .where(
-            Job.company_id == company_id,
-            Job.first_message_at >= start,
-            Job.first_message_at < end,
-            _status_bucket_case() == bucket,
-        )
-        .order_by(Job.first_message_at.desc())
+        select(Job, bucket_expr)
+        .where(*conditions)
+        .order_by(Job.first_message_at.asc())
         .limit(_JOB_DETAIL_LIMIT)
     )
-    jobs = list((await db.execute(jobs_q)).scalars().all())
-    if not jobs:
+    result_rows = (await db.execute(jobs_q)).all()
+    if not result_rows:
         return []
+
+    jobs = [row[0] for row in result_rows]
+    bucket_by_job = {row[0].id: row[1] for row in result_rows}
 
     job_ids = [job.id for job in jobs]
     dj_q = (
@@ -648,6 +657,7 @@ async def get_company_status_jobs(
             {
                 "job_id": job.id,
                 "dispatch_job_id": origin.id if origin is not None else None,
+                "bucket": bucket_by_job[job.id],
                 "lifecycle_status": job.lifecycle_status,
                 "first_message_at": job.first_message_at,
                 "appt_at": job.appt_at,

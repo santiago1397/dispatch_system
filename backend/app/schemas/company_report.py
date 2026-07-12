@@ -45,6 +45,7 @@ class CompanyReportJobRow(BaseSchema):
 
     job_id: UUID
     dispatch_job_id: UUID | None
+    bucket: str
     lifecycle_status: str
     first_message_at: datetime
     appt_at: datetime | None
@@ -56,6 +57,10 @@ class CompanyReportJobRow(BaseSchema):
 
 
 class CompanyReportJobsResponse(BaseSchema):
+    """``bucket`` is one of ``REPORT_BUCKETS``, or ``"total"`` for the
+    unfiltered "Total" column — every job for the company in range, across
+    all buckets."""
+
     start_date: date
     end_date: date
     company_id: UUID

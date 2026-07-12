@@ -82,9 +82,10 @@ async def get_company_report_jobs(
     start_date: date,
     end_date: date,
     company_id: UUID,
-    bucket: str,
+    bucket: str | None,
 ) -> CompanyReportJobsResponse:
-    """Drill-down for one company/bucket cell of ``get_company_report``.
+    """Drill-down for one company/bucket cell — or the company's "Total"
+    column when ``bucket`` is ``None`` — of ``get_company_report``.
 
     Reuses the same bucket classification the breakdown counts are built
     from (``app.repositories.job._status_bucket_case``), so this can never
@@ -105,6 +106,6 @@ async def get_company_report_jobs(
         end_date=end_date,
         company_id=company_id,
         company_name=company_name,
-        bucket=bucket,
+        bucket=bucket or "total",
         items=[CompanyReportJobRow(**row) for row in rows],
     )

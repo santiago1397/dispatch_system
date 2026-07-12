@@ -70,8 +70,12 @@ async def company_status_report_jobs(
     db: DBSession,
     _user: CurrentUser,
     company_id: UUID = Query(description="Company to drill into."),
-    bucket: str = Query(
-        description=f"One of: {', '.join(REPORT_BUCKETS)}.",
+    bucket: str | None = Query(
+        default=None,
+        description=(
+            f"One of: {', '.join(REPORT_BUCKETS)}. Omit for the company's "
+            '"Total" column — every job in range, across all buckets.'
+        ),
     ),
     start_date: date = Query(
         default_factory=business_today,
@@ -84,9 +88,10 @@ async def company_status_report_jobs(
 ):
     """List the individual jobs classified into ``bucket`` for ``company_id``
     within ``[start_date, end_date]`` — lets an operator confirm the
-    per-company report counts are classifying jobs correctly.
+    per-company report counts are classifying jobs correctly. Omit
+    ``bucket`` for the company's "Total" column.
     """
-    if bucket not in REPORT_BUCKETS:
+    if bucket is not None and bucket not in REPORT_BUCKETS:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"bucket must be one of: {', '.join(REPORT_BUCKETS)}",

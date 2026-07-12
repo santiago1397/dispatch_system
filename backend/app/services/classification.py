@@ -33,11 +33,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.db.models.company import Company
 from app.db.models.dispatch_job import ClassificationStatus, DispatchJob
+from app.db.models.job_lifecycle_event import LifecycleEventSource
 from app.db.models.openphone import IncomingMessage
 from app.repositories import company_repo, dispatch_job_repo, job_repo, phone_binding_repo
 from app.schemas.dispatch_job import ClosingExtraction, CompanyClassification, JobExtraction
 from app.services.address_normalizer import normalize_address, normalize_phone
 from app.services.app_settings import AppSettingsService
+from app.services.lifecycle import LifecycleService, LifecycleStatus
+from app.services.timeparse import parse_iso8601
 
 logger = logging.getLogger(__name__)
 
@@ -399,6 +402,21 @@ class JobClassificationService:
             original_inbound_channel=inbound_channel,
         )
 
+        # The inbound job request may already state an appointment date/time
+        # (same-day or a future day) — reflect that immediately instead of
+        # leaving a scheduled job sitting as "pending" as if unscheduled.
+        # Same-day vs. future-day is derived downstream from ``appt_at`` vs.
+        # ``first_message_at`` (see ``get_company_status_breakdown``).
+        appt_dt = parse_iso8601(extraction.scheduled_at)
+        if appt_dt is not None:
+            await LifecycleService(self.db).transition(
+                job=new_job,
+                to_status=LifecycleStatus.APPT_SET,
+                source=LifecycleEventSource.CLASSIFICATION,
+                payload={"appt_iso": extraction.scheduled_at},
+                at=_message_timestamp(message) or datetime.now(UTC),
+            )
+
         return await self._save_extraction(
             job=job,
             company=company,
@@ -574,7 +592,13 @@ class JobClassificationService:
             "- car_year: Vehicle year (only if automotive job)\n"
             "- customer_name: Name of the customer (not the technician)\n"
             "- customer_phone: Phone number of the customer (not the dispatcher)\n"
-            "- scheduled_at: Appointment or arrival time if mentioned (ISO-8601 if possible)\n"
+            "- scheduled_at: The appointment/arrival date+time, if mentioned. Messages "
+            "often state the date and time window as separate fields (e.g. "
+            "\"Date: 7/10/2026\" and \"Hours: 12:00 PM to 2:00 PM\") — combine them into "
+            "a single ISO-8601 datetime using the START of the time window and the exact "
+            "year given in the message (never assume the current year). "
+            "Example: \"Date: 7/10/2026\" + \"Hours: 12:00 PM to 2:00 PM\" -> "
+            "\"2026-07-10T12:00:00\". If no date/time is mentioned, set to null.\n"
             "- job_description: Free-text description of what the job involves\n\n"
             "Only extract values that are clearly present in the message. "
             "Set to null if not found."

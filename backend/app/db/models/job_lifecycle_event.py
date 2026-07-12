@@ -43,6 +43,11 @@ class LifecycleEventSource(StrEnum):
     # Operator declined the job in the source chat (reject-phrase or a
     # re-paste of the job with a short note). See ``services/reject_detector.py``.
     OPERATOR_REJECT = "operator_reject"
+    # The inbound job request itself already stated an appointment date/time
+    # (e.g. "Date: 7/10/2026, Hours: 12:00 PM to 2:00 PM"), extracted at
+    # classification time — before any operator/tech has acted on the job.
+    # See ``services/classification.py``.
+    CLASSIFICATION = "classification"
 
 
 class JobLifecycleEvent(Base, TimestampMixin):

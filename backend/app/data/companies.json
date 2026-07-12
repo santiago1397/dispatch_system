@@ -114,6 +114,30 @@
     "phone_numbers": []
   },
   {
+    "name": "CALL_ORANGE",
+    "display_name": "CallOrange",
+    "identification_patterns": [
+      {
+        "patterns": [
+          "CallOrange",
+          "\\(\\d{10}\\)"
+        ]
+      },
+      {
+        "patterns": [
+          "CallOrange",
+          "s1j\\.co/j/[A-Z0-9]+"
+        ]
+      },
+      {
+        "patterns": [
+          "(?:.*\\n){0,1}.*CallOrange.*(?:\\n|)$"
+        ]
+      }
+    ],
+    "phone_numbers": []
+  },
+  {
     "name": "GARAGE_LEAD",
     "display_name": "Garage Lead",
     "identification_patterns": [
@@ -242,7 +266,8 @@
     "identification_patterns": [
       {
         "patterns": [
-          "s1j\\.co/j/[A-Z0-9]+"
+          "s1j\\.co/j/[A-Z0-9]+",
+          "\\A(?:(?!CallOrange)[\\s\\S])*\\Z"
         ]
       },
       {
@@ -349,6 +374,47 @@
       "6054507491",
       "6506754074"
     ]
+  },
+  {
+    "name": "SHAR_TOP_GARAGE",
+    "display_name": "SHAR Top Garage",
+    "identification_patterns": [
+      {
+        "patterns": [
+          "TOP\\sGarage\\sChicago",
+          "Job:\\s[A-Z0-9]{6}-",
+          "Phone\\s1:"
+        ]
+      },
+      {
+        "patterns": [
+          "27\\sIllinois\\sGarage\\sDoor",
+          "Job:\\s[A-Z0-9]{6}-",
+          "Phone\\s1:"
+        ]
+      },
+      {
+        "patterns": [
+          "TOP Garage Chicago"
+        ]
+      },
+      {
+        "patterns": [
+          "27 Illinois Garage Door"
+        ]
+      },
+      {
+        "patterns": [
+          "(?:.*\\n){0,1}.*TOP Garage.*(?:\\n|)$"
+        ]
+      },
+      {
+        "patterns": [
+          "(?:.*\\n){0,1}.*27 Illinois Garage Door.*(?:\\n|)$"
+        ]
+      }
+    ],
+    "phone_numbers": []
   },
   {
     "name": "SLK",

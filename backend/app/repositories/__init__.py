@@ -37,8 +37,6 @@ from app.repositories import company_update as company_update_repo
 
 from app.repositories import daily_stats as daily_stats_repo
 
-from app.repositories import openphone_thread_label as thread_label_repo
-
 __all__ = [
     "BaseRepository",
     "user_repo",

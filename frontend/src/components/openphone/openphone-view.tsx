@@ -2,6 +2,7 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { ThreadList } from "./thread-list";
+import { ThreadHeader } from "./thread-header";
 import { MessageList } from "./message-list";
 import { EmptyState } from "@/components/whatsapp/empty-state";
 
@@ -26,9 +27,12 @@ export function OpenPhoneView() {
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
         {activeCounterparty ? (
-          <div className="min-h-0 flex-1">
-            <MessageList key={activeCounterparty} counterparty={activeCounterparty} />
-          </div>
+          <>
+            <ThreadHeader counterparty={activeCounterparty} />
+            <div className="min-h-0 flex-1">
+              <MessageList key={activeCounterparty} counterparty={activeCounterparty} />
+            </div>
+          </>
         ) : (
           <EmptyState
             title="Select a thread"

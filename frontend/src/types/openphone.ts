@@ -41,9 +41,33 @@ export interface OpenPhoneThreadSummary {
   last_direction: string | null;
   last_created_at: string;
   message_count: number;
+  company_id: string | null;
+  company_name: string | null;
+  company_display_name: string | null;
+  label: string | null;
 }
 
 export interface OpenPhoneThreadList {
   items: OpenPhoneThreadSummary[];
   total: number;
+}
+
+/**
+ * Request body for `PUT /openphone/threads/{counterparty}/label`.
+ * At least one of `company_id`/`label` must be set — clearing both is
+ * what `DELETE .../label` is for.
+ */
+export interface OpenPhoneThreadLabelUpsert {
+  company_id?: string | null;
+  label?: string | null;
+}
+
+export interface OpenPhoneThreadLabelRead {
+  counterparty: string;
+  company_id: string | null;
+  company_name: string | null;
+  company_display_name: string | null;
+  label: string | null;
+  created_at: string;
+  updated_at: string | null;
 }

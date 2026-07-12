@@ -7,7 +7,12 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.openphone import openphone_client
-from app.core.exceptions import BadRequestError, ExternalServiceError, NotFoundError, ValidationError
+from app.core.exceptions import (
+    BadRequestError,
+    ExternalServiceError,
+    NotFoundError,
+    ValidationError,
+)
 from app.db.models.openphone import IncomingMessage
 from app.db.models.openphone_thread_label import OpenPhoneThreadLabel
 from app.repositories import company_repo, openphone_repo, thread_label_repo

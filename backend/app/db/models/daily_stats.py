@@ -12,7 +12,7 @@ import uuid
 from datetime import date
 from enum import StrEnum
 
-from sqlalchemy import Date, Index, String
+from sqlalchemy import Date, Index, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -31,7 +31,12 @@ class DailyStatsSnapshot(Base, TimestampMixin):
     ``scope_id`` is NULL for ``per_job`` (which already has its own
     id in the payload) and points at a Technician / Company id for
     the other two scopes. The (snapshot_date, scope) index supports
-    the dashboard query "give me all stats for date X".
+    the dashboard query "give me all stats for date X". The unique
+    constraint backs ``repositories/daily_stats.py:upsert_snapshot``'s
+    ``ON CONFLICT (snapshot_date, scope, scope_id)`` — note Postgres
+    treats NULL != NULL, so it does not dedupe ``per_job`` rows
+    (``scope_id`` always NULL there); harmless today since ``per_job``
+    is written at most once per date.
     """
 
     __tablename__ = "daily_stats_snapshots"
@@ -40,6 +45,12 @@ class DailyStatsSnapshot(Base, TimestampMixin):
             "ix_daily_stats_snapshots_date_scope_idx",
             "snapshot_date",
             "scope",
+        ),
+        UniqueConstraint(
+            "snapshot_date",
+            "scope",
+            "scope_id",
+            name="uq_daily_stats_snapshots_date_scope_scope_id",
         ),
     )
 

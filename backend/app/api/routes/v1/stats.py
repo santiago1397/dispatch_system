@@ -17,6 +17,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import CurrentUser, DBSession
+from app.core.timezone import business_today
 from app.repositories import daily_stats as stats_repo
 from app.schemas.daily_stats import DailyStatsList, DailyStatsSnapshotRead
 
@@ -37,7 +38,7 @@ async def list_stats(
     db: DBSession,
     _user: CurrentUser,
     snapshot_date: date = Query(
-        default_factory=lambda: date.today() - timedelta(days=1),
+        default_factory=lambda: business_today() - timedelta(days=1),
         description="Date to fetch snapshots for. Defaults to yesterday.",
     ),
     scope: str | None = Query(
@@ -74,7 +75,7 @@ async def export_stats(
     db: DBSession,
     _user: CurrentUser,
     snapshot_date: date = Query(
-        default_factory=lambda: date.today() - timedelta(days=1),
+        default_factory=lambda: business_today() - timedelta(days=1),
         description="Date to export. Defaults to yesterday.",
     ),
     scope: str | None = Query(

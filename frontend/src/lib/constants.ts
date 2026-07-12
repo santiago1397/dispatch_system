@@ -45,6 +45,8 @@ export const API_ROUTES = {
   OPENPHONE_THREADS: "/openphone/threads",
   OPENPHONE_THREAD_MESSAGES: (counterparty: string) =>
     `/openphone/threads/${encodeURIComponent(counterparty)}/messages`,
+  OPENPHONE_THREAD_LABEL: (counterparty: string) =>
+    `/openphone/threads/${encodeURIComponent(counterparty)}/label`,
 
   // Application settings (admin only)
   SETTINGS_LLM: "/settings/llm",
@@ -73,6 +75,7 @@ export const API_ROUTES = {
 
   // Live per-company job status report — computed on every call.
   REPORTS_COMPANY_STATUS: "/reports/company-status",
+  REPORTS_COMPANY_STATUS_JOBS: "/reports/company-status/jobs",
 } as const;
 
 // Navigation routes

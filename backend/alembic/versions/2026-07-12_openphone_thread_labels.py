@@ -1,6 +1,6 @@
 """openphone thread labels
 
-Revision ID: 2026_07_12_openphone_thread_labels
+Revision ID: 2026_07_12_openphone_labels
 Revises: 2026_07_06_tech_company_relays
 Create Date: 2026-07-12 00:00:00.000000
 
@@ -8,6 +8,9 @@ New ``openphone_thread_labels`` table backing the "associate a company or
 label" affordance on the ``/openphone`` chat view. Deliberately separate
 from ``company_phone_bindings`` (which feeds the tier-3 classifier) — this
 table is display-only and never touches classification.
+
+Revision id kept short (<=32 chars) — ``alembic_version.version_num`` is
+``VARCHAR(32)`` and the obvious longer id doesn't fit.
 """
 
 import sqlalchemy as sa
@@ -15,7 +18,7 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "2026_07_12_openphone_thread_labels"
+revision = "2026_07_12_openphone_labels"
 down_revision = "2026_07_06_tech_company_relays"
 branch_labels = None
 depends_on = None

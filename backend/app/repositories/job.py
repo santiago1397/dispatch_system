@@ -3,7 +3,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import and_, case, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -506,6 +506,56 @@ async def get_alert_job_summaries(
     return summaries
 
 
+def _business_day_expr(col):
+    """Chicago business-day bucket for a timestamptz column, in SQL.
+
+    Converts to Chicago local time, shifts back by the 5am cutoff, then
+    truncates to a day — the SQL equivalent of
+    ``app.core.timezone.business_day_of``. Must stay in sync with that
+    function if the cutoff hour or timezone ever changes.
+    """
+    chicago_local = func.timezone("America/Chicago", col)
+    return func.date_trunc("day", chicago_local - text("interval '5 hours'"))
+
+
+def _status_bucket_case():
+    """The Job outcome-bucket CASE expression, shared by the count and
+    detail queries below so they can never classify a job differently.
+
+    Buckets (evaluated in order, first match wins):
+    - ``rejected`` — ``lifecycle_status == 'rejected'``.
+    - ``closed_completed`` — ``lifecycle_status`` in ``('closed', 'completed')``.
+      Deliberately merged: the system elsewhere distinguishes a tech's
+      "done" (``completed``) from the operator's authoritative filing
+      (``closed``, see ``closing_unfiled`` alert), but this report reports
+      them as one bucket per product decision.
+    - ``scheduled_another_day`` — ``lifecycle_status == 'appt_set'`` AND the
+      appointment's Chicago business day differs from the job's arrival
+      business day. A same-day appointment does NOT count here — it falls
+      through to ``still_open``.
+    - ``canceled`` — ``lifecycle_status == 'canceled'``.
+    - ``still_open`` — everything else (pending, dispatched, accepted,
+      in_progress, needs_follow_up, and same-day appt_set).
+    """
+    return case(
+        (Job.lifecycle_status == "rejected", "rejected"),
+        (Job.lifecycle_status.in_(["closed", "completed"]), "closed_completed"),
+        (
+            and_(
+                Job.lifecycle_status == "appt_set",
+                Job.appt_at.is_not(None),
+                _business_day_expr(Job.appt_at) != _business_day_expr(Job.first_message_at),
+            ),
+            "scheduled_another_day",
+        ),
+        (Job.lifecycle_status == "canceled", "canceled"),
+        else_="still_open",
+    )
+
+
+_JOB_DETAIL_LIMIT = 500
+
+
 async def get_company_status_breakdown(
     db: AsyncSession,
     *,
@@ -518,41 +568,15 @@ async def get_company_status_breakdown(
     A job is anchored to the day it *arrived*, not the day its status last
     changed — so a job that arrives on day X and closes 3 days later still
     counts toward day X, just in the ``closed_completed`` bucket instead of
-    ``still_open``.
-
-    Buckets (evaluated in order, first match wins):
-    - ``rejected`` — ``lifecycle_status == 'rejected'``.
-    - ``closed_completed`` — ``lifecycle_status`` in ``('closed', 'completed')``.
-      Deliberately merged: the system elsewhere distinguishes a tech's
-      "done" (``completed``) from the operator's authoritative filing
-      (``closed``, see ``closing_unfiled`` alert), but this report reports
-      them as one bucket per product decision.
-    - ``scheduled_another_day`` — ``lifecycle_status == 'appt_set'`` AND the
-      appointment's calendar day differs from the job's arrival day. A
-      same-day appointment does NOT count here — it falls through to
-      ``still_open``.
-    - ``canceled`` — ``lifecycle_status == 'canceled'``.
-    - ``still_open`` — everything else (pending, dispatched, accepted,
-      in_progress, needs_follow_up, and same-day appt_set).
+    ``still_open``. "Day" means the Chicago business day (5am-to-midnight,
+    see ``app.core.timezone``), not a UTC calendar day. See
+    ``_status_bucket_case`` for the bucket rules.
 
     Returns ``(company_id, bucket, count)`` rows. Jobs with no company
     match (``company_id IS NULL``) are excluded — they never reached
     classification and have no company to report against.
     """
-    bucket = case(
-        (Job.lifecycle_status == "rejected", "rejected"),
-        (Job.lifecycle_status.in_(["closed", "completed"]), "closed_completed"),
-        (
-            and_(
-                Job.lifecycle_status == "appt_set",
-                Job.appt_at.is_not(None),
-                func.date_trunc("day", Job.appt_at) != func.date_trunc("day", Job.first_message_at),
-            ),
-            "scheduled_another_day",
-        ),
-        (Job.lifecycle_status == "canceled", "canceled"),
-        else_="still_open",
-    ).label("bucket")
+    bucket = _status_bucket_case().label("bucket")
 
     query = (
         select(Job.company_id, bucket, func.count().label("count"))
@@ -565,6 +589,77 @@ async def get_company_status_breakdown(
     )
     result = await db.execute(query)
     return [(row.company_id, row.bucket, row.count) for row in result.all()]
+
+
+async def get_company_status_jobs(
+    db: AsyncSession,
+    *,
+    start: datetime,
+    end: datetime,
+    company_id: uuid.UUID,
+    bucket: str,
+) -> list[dict]:
+    """Detail rows behind one cell of ``get_company_status_breakdown``.
+
+    Uses the exact same ``_status_bucket_case`` classification, filtered
+    down to a single company + bucket, so operators can audit *which* jobs
+    landed in a bucket instead of trusting the count alone. Ordered by
+    ``first_message_at`` descending (most recent arrivals first), capped at
+    ``_JOB_DETAIL_LIMIT`` rows.
+    """
+    jobs_q = (
+        select(Job)
+        .where(
+            Job.company_id == company_id,
+            Job.first_message_at >= start,
+            Job.first_message_at < end,
+            _status_bucket_case() == bucket,
+        )
+        .order_by(Job.first_message_at.desc())
+        .limit(_JOB_DETAIL_LIMIT)
+    )
+    jobs = list((await db.execute(jobs_q)).scalars().all())
+    if not jobs:
+        return []
+
+    job_ids = [job.id for job in jobs]
+    dj_q = (
+        select(DispatchJob)
+        .where(DispatchJob.job_id.in_(job_ids))
+        .order_by(DispatchJob.job_id, DispatchJob.created_at.asc())
+        .options(selectinload(DispatchJob.incoming_message))
+    )
+    origin_by_job: dict[uuid.UUID, DispatchJob] = {}
+    for dj in (await db.execute(dj_q)).scalars().all():
+        if dj.job_id is not None and dj.job_id not in origin_by_job:
+            origin_by_job[dj.job_id] = dj
+
+    rows = []
+    for job in jobs:
+        origin = origin_by_job.get(job.id)
+        message = origin.incoming_message if origin is not None else None
+        address = " ".join(
+            p for p in (job.address_street_number, job.address_street_name) if p
+        ).strip() or (origin.address if origin is not None else None)
+        preview = None
+        if message is not None and message.content:
+            preview = message.content[:200]
+        rows.append(
+            {
+                "job_id": job.id,
+                "dispatch_job_id": origin.id if origin is not None else None,
+                "lifecycle_status": job.lifecycle_status,
+                "first_message_at": job.first_message_at,
+                "appt_at": job.appt_at,
+                "address": address or None,
+                "customer_name": origin.customer_name if origin is not None else None,
+                "customer_phone": job.customer_phone_e164
+                or (origin.customer_phone if origin is not None else None),
+                "job_type": job.job_type or (origin.job_type if origin is not None else None),
+                "message_preview": preview,
+            }
+        )
+    return rows
 
 
 async def search_job_ids_by_message(db: AsyncSession, search: str) -> list[uuid.UUID]:

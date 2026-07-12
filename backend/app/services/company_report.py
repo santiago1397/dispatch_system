@@ -6,37 +6,29 @@ every request queries ``jobs`` directly (see
 always current. The date range is caller-supplied and works identically
 for a single day, a week, or a month; there is no server-side notion of
 "period" beyond ``[start, end)``.
+
+"Day" here means the Chicago business day (5am-to-midnight), not UTC
+midnight — see ``app.core.timezone``.
 """
 
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import date
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.timezone import business_range_bounds
 from app.db.models.company import Company
-from app.repositories.job import get_company_status_breakdown
-from app.schemas.company_report import CompanyReportResponse, CompanyReportRow
-
-_BUCKETS = (
-    "rejected",
-    "closed_completed",
-    "scheduled_another_day",
-    "canceled",
-    "still_open",
+from app.repositories.job import get_company_status_breakdown, get_company_status_jobs
+from app.schemas.company_report import (
+    REPORT_BUCKETS,
+    CompanyReportJobRow,
+    CompanyReportJobsResponse,
+    CompanyReportResponse,
+    CompanyReportRow,
 )
 
-
-def _range_bounds(start_date: date, end_date: date) -> tuple[datetime, datetime]:
-    """Return ``[start_of(start_date), start_of(end_date + 1 day))`` in UTC.
-
-    ``end_date`` is inclusive from the caller's perspective (e.g. a
-    calendar month), so the upper bound is pushed one day past it —
-    matching the ``[start, end)`` convention used by ``daily_stats.py``.
-    """
-    start = datetime.combine(start_date, time.min, tzinfo=UTC)
-    end = datetime.combine(end_date, time.min, tzinfo=UTC) + timedelta(days=1)
-    return start, end
+_BUCKETS = REPORT_BUCKETS
 
 
 async def get_company_report(
@@ -46,7 +38,7 @@ async def get_company_report(
     end_date: date,
 ) -> CompanyReportResponse:
     """Compute the live per-company status breakdown for ``[start_date, end_date]``."""
-    start, end = _range_bounds(start_date, end_date)
+    start, end = business_range_bounds(start_date, end_date)
     rows = await get_company_status_breakdown(db, start=start, end=end)
 
     counts_by_company: dict[UUID, dict[str, int]] = {}
@@ -82,3 +74,37 @@ async def get_company_report(
     items.sort(key=lambda row: row.total, reverse=True)
 
     return CompanyReportResponse(start_date=start_date, end_date=end_date, items=items)
+
+
+async def get_company_report_jobs(
+    db: AsyncSession,
+    *,
+    start_date: date,
+    end_date: date,
+    company_id: UUID,
+    bucket: str,
+) -> CompanyReportJobsResponse:
+    """Drill-down for one company/bucket cell of ``get_company_report``.
+
+    Reuses the same bucket classification the breakdown counts are built
+    from (``app.repositories.job._status_bucket_case``), so this can never
+    disagree with the count an operator is trying to verify.
+    """
+    start, end = business_range_bounds(start_date, end_date)
+    rows = await get_company_status_jobs(
+        db, start=start, end=end, company_id=company_id, bucket=bucket
+    )
+
+    company_row = (
+        await db.execute(select(Company.display_name, Company.name).where(Company.id == company_id))
+    ).first()
+    company_name = (company_row.display_name or company_row.name) if company_row else "Unknown"
+
+    return CompanyReportJobsResponse(
+        start_date=start_date,
+        end_date=end_date,
+        company_id=company_id,
+        company_name=company_name,
+        bucket=bucket,
+        items=[CompanyReportJobRow(**row) for row in rows],
+    )

@@ -4,17 +4,20 @@ import { useMemo, useState } from "react";
 import { Download } from "lucide-react";
 import { Button, Skeleton } from "@/components/ui";
 import { useDailyStats, useExportStats } from "@/hooks";
+import { todayBusinessIso } from "@/lib/business-date";
 import {
   STATS_SCOPES,
   STATS_SCOPE_LABEL,
   type StatsScope,
 } from "@/types";
 
-/** Default to yesterday — the daily-stats cron at 23:55 writes today's
- *  snapshots after midnight, but yesterday is always ready.
+/** Default to yesterday's Chicago business day — the daily-stats cron
+ *  runs at 00:15 America/Chicago, shortly after each business day closes
+ *  at midnight, so yesterday's snapshot is always ready by the time
+ *  today's business day starts.
  */
 function yesterdayIso(): string {
-  const d = new Date();
+  const d = new Date(`${todayBusinessIso()}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() - 1);
   return d.toISOString().slice(0, 10);
 }

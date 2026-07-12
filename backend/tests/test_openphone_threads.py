@@ -15,13 +15,18 @@ verified.
 
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import settings
+from app.core.exceptions import NotFoundError, ValidationError
+from app.db.models.company import Company
 from app.db.models.openphone import IncomingMessage, MessageSource
 from app.repositories import openphone as openphone_repo
+from app.repositories import openphone_thread_label as thread_label_repo
+from app.services.openphone import OpenPhoneService
 
 
 @pytest.fixture
@@ -204,3 +209,124 @@ class TestListThreadMessages:
         )
 
         assert [m.content for m in messages] == ["recent"]
+
+
+async def _make_company(db_session: AsyncSession, name: str) -> Company:
+    company = Company(name=name, display_name=name.title())
+    db_session.add(company)
+    await db_session.flush()
+    return company
+
+
+class TestThreadLabelRepository:
+    @pytest.mark.anyio
+    async def test_upsert_creates_then_updates(self, db_session: AsyncSession):
+        company = await _make_company(db_session, "acme-locksmith")
+
+        created = await thread_label_repo.upsert(
+            db_session,
+            counterparty=NUM_A,
+            company_id=company.id,
+            label=None,
+            created_by_user_id=None,
+        )
+        assert created.company_id == company.id
+        assert created.label is None
+
+        updated = await thread_label_repo.upsert(
+            db_session,
+            counterparty=NUM_A,
+            company_id=None,
+            label="Mike's cell",
+            created_by_user_id=None,
+        )
+        assert updated.id == created.id
+        assert updated.company_id is None
+        assert updated.label == "Mike's cell"
+
+    @pytest.mark.anyio
+    async def test_get_by_counterparties_bulk(self, db_session: AsyncSession):
+        await thread_label_repo.upsert(
+            db_session, counterparty=NUM_A, company_id=None, label="A label", created_by_user_id=None
+        )
+        await thread_label_repo.upsert(
+            db_session, counterparty=NUM_B, company_id=None, label="B label", created_by_user_id=None
+        )
+
+        found = await thread_label_repo.get_by_counterparties(db_session, [NUM_A, NUM_B, NUM_C])
+
+        assert set(found) == {NUM_A, NUM_B}
+        assert found[NUM_A].label == "A label"
+
+    @pytest.mark.anyio
+    async def test_delete(self, db_session: AsyncSession):
+        await thread_label_repo.upsert(
+            db_session, counterparty=NUM_A, company_id=None, label="temp", created_by_user_id=None
+        )
+
+        assert await thread_label_repo.delete(db_session, NUM_A) is True
+        assert await thread_label_repo.get_by_counterparty(db_session, NUM_A) is None
+        assert await thread_label_repo.delete(db_session, NUM_A) is False
+
+
+class TestThreadLabelService:
+    @pytest.mark.anyio
+    async def test_list_threads_enriched_with_label_and_company(self, db_session: AsyncSession):
+        company = await _make_company(db_session, "bobs-towing")
+        db_session.add(
+            _make_message(direction="incoming", from_number=NUM_A, content="hi", created_at=NOW)
+        )
+        db_session.add(
+            _make_message(direction="incoming", from_number=NUM_B, content="hey", created_at=NOW)
+        )
+        await db_session.flush()
+
+        await thread_label_repo.upsert(
+            db_session,
+            counterparty=NUM_A,
+            company_id=company.id,
+            label="dispatch line",
+            created_by_user_id=None,
+        )
+
+        service = OpenPhoneService(db_session)
+        threads, total = await service.list_threads(limit=10)
+
+        assert total == 2
+        by_counterparty = {t["counterparty"]: t for t in threads}
+        labeled = by_counterparty[NUM_A]
+        assert labeled["company_id"] == company.id
+        assert labeled["company_name"] == "bobs-towing"
+        assert labeled["label"] == "dispatch line"
+
+        unlabeled = by_counterparty[NUM_B]
+        assert unlabeled["company_id"] is None
+        assert unlabeled["label"] is None
+
+    @pytest.mark.anyio
+    async def test_upsert_thread_label_requires_company_or_label(self, db_session: AsyncSession):
+        service = OpenPhoneService(db_session)
+        with pytest.raises(ValidationError):
+            await service.upsert_thread_label(
+                counterparty=NUM_A, company_id=None, label=None, created_by_user_id=None
+            )
+        with pytest.raises(ValidationError):
+            await service.upsert_thread_label(
+                counterparty=NUM_A, company_id=None, label="   ", created_by_user_id=None
+            )
+
+    @pytest.mark.anyio
+    async def test_upsert_thread_label_rejects_unknown_company(self, db_session: AsyncSession):
+        service = OpenPhoneService(db_session)
+        with pytest.raises(NotFoundError):
+            await service.upsert_thread_label(
+                counterparty=NUM_A,
+                company_id=uuid4(),
+                label=None,
+                created_by_user_id=None,
+            )
+
+    @pytest.mark.anyio
+    async def test_delete_thread_label_is_a_noop_when_unset(self, db_session: AsyncSession):
+        service = OpenPhoneService(db_session)
+        await service.delete_thread_label(NUM_A)  # must not raise

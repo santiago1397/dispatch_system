@@ -15,7 +15,8 @@ Three scopes:
 The service is invoked:
 
 1. From the APScheduler cron at ``STATS_DAILY_HOUR:STATS_DAILY_MINUTE``
-   (default 23:55) — see ``main.py:lifespan``.
+   (default 00:15 Chicago, 15 minutes after the business day closes) —
+   see ``main.py:lifespan``.
 2. From the ``daily-stats`` CLI command — for ad-hoc runs against a
    backfill date.
 
@@ -23,17 +24,21 @@ The snapshot is upserted on ``(snapshot_date, scope, scope_id)`` so
 re-running for the same date overwrites the prior rollup — important
 for the manual reprocessing case (operator changed a job's closed_at
 yesterday and wants fresh stats).
+
+``snapshot_date`` is a Chicago business day (5am-to-midnight, see
+``app.core.timezone``), not a UTC calendar day.
 """
 
 import logging
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.timezone import business_day_bounds
 from app.db.models.daily_stats import StatsScope
 from app.db.models.job import Job
 from app.db.models.job_lifecycle_event import (
@@ -46,10 +51,8 @@ logger = logging.getLogger(__name__)
 
 
 def _day_bounds(d: date) -> tuple[datetime, datetime]:
-    """Return [start_of_day, start_of_next_day) in UTC for the given date."""
-    start = datetime.combine(d, time.min, tzinfo=UTC)
-    end = start + timedelta(days=1)
-    return start, end
+    """Return [start_of_business_day, start_of_next_business_day) in UTC."""
+    return business_day_bounds(d)
 
 
 def _parse_money(s: str | None) -> float:
@@ -141,9 +144,11 @@ class DailyStatsService:
     async def _snapshot_per_job(self, start: datetime, end: datetime, snapshot_date: date) -> int:
         """One snapshot row per Job that had an event in [start, end).
 
-        Note: payload's ``job_id`` is the canonical id; ``scope_id`` is
-        NULL because the unique key already includes the job via the
-        payload.
+        ``scope_id`` is the job's id — required so the
+        ``(snapshot_date, scope, scope_id)`` unique constraint can tell
+        two jobs on the same day apart (Postgres treats NULL as never
+        equal to NULL, so a shared NULL scope_id would neither dedupe
+        nor conflict across jobs).
         """
         # Pull all events for the date in one query, with eager job info.
         query = (
@@ -210,7 +215,7 @@ class DailyStatsService:
                 self.db,
                 snapshot_date=snapshot_date,
                 scope=StatsScope.PER_JOB.value,
-                scope_id=None,
+                scope_id=job_id,
                 payload=acc.to_payload(),
             )
             count += 1

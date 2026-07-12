@@ -1,12 +1,15 @@
 """CLI command: roll up daily stats for a date.
 
 Invoked by the APScheduler cron at ``STATS_DAILY_HOUR:STATS_DAILY_MINUTE``
-(default 23:55) inside ``main.py:lifespan``, and directly for backfill
-or reprocessing:
+(default 00:15 Chicago) inside ``main.py:lifespan``, and directly for
+backfill or reprocessing:
 
     uv run agents_bots cmd daily-stats                       # yesterday
     uv run agents_bots cmd daily-stats --date=2026-06-26    # explicit
     uv run agents_bots cmd daily-stats --scope=per_tech      # one scope
+
+"Yesterday" and any explicit ``--date`` are Chicago business days
+(5am-to-midnight, see ``app.core.timezone``), not UTC calendar days.
 """
 
 import asyncio
@@ -15,6 +18,7 @@ from datetime import date, timedelta
 import click
 
 from app.commands import command, error, info, success
+from app.core.timezone import business_today
 
 
 @command("daily-stats", help="Roll up daily stats for the given date")
@@ -34,7 +38,7 @@ def daily_stats(snapshot_date: str | None, scope: str) -> None:
     """Roll up daily stats for a single date."""
 
     if snapshot_date is None:
-        target = date.today() - timedelta(days=1)
+        target = business_today() - timedelta(days=1)
     else:
         try:
             target = date.fromisoformat(snapshot_date)

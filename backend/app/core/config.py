@@ -124,7 +124,8 @@ class Settings(BaseSettings):
     # ``SCHEDULER_ENABLED=True`` AND we're not in the pytest test
     # environment (``ENVIRONMENT != "test"``). Two jobs run:
     # - ``alert_engine.scan`` every ALERT_ENGINE_INTERVAL_MINUTES (default 5)
-    # - ``daily_stats.snapshot`` at STATS_DAILY_HOUR:STATS_DAILY_MINUTE local
+    # - ``daily_stats.snapshot`` at STATS_DAILY_HOUR:STATS_DAILY_MINUTE
+    #   America/Chicago (see ``app.core.timezone``)
     # Thresholds are operator-tunable; alerts only fire if a Job has been
     # stuck in the offending status for longer than the configured
     # minutes.
@@ -158,8 +159,11 @@ class Settings(BaseSettings):
     # blind during an outage like this, since nothing reaches the pipeline
     # to alert on in the first place. Raises ``whatsapp_ingestion_stalled``.
     ALERTS_WHATSAPP_INGESTION_STALLED_MINUTES: int = 30
-    STATS_DAILY_HOUR: int = 23
-    STATS_DAILY_MINUTE: int = 55
+    # 00:15 America/Chicago — 15 minutes after the business day closes at
+    # midnight, so the cron always captures the full just-completed
+    # business day before snapshotting it.
+    STATS_DAILY_HOUR: int = 0
+    STATS_DAILY_MINUTE: int = 15
 
     # === CORS ===
     CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:8080"]

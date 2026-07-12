@@ -153,9 +153,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             from app.services.daily_stats import DailyStatsService
 
             async def _run_daily_stats() -> None:
-                from datetime import date, timedelta
+                from datetime import timedelta
 
-                yesterday = date.today() - timedelta(days=1)
+                from app.core.timezone import business_today
+
+                yesterday = business_today() - timedelta(days=1)
                 async with async_session_maker() as session:
                     n = await DailyStatsService(session).snapshot(snapshot_date=yesterday)
                     await session.commit()
@@ -165,11 +167,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                         n,
                     )
 
+            from app.core.timezone import BUSINESS_TZ
+
             scheduler.add_job(
                 _run_daily_stats,
                 "cron",
                 hour=settings.STATS_DAILY_HOUR,
                 minute=settings.STATS_DAILY_MINUTE,
+                timezone=BUSINESS_TZ,
                 id="daily_stats",
                 replace_existing=True,
                 coalesce=True,

@@ -22,3 +22,31 @@ export interface CompanyReportResponse {
   end_date: string;
   items: CompanyReportRow[];
 }
+
+/** Bucket keys reported per company — matches ``REPORT_BUCKETS`` on the backend. */
+export type CompanyReportBucket = Exclude<
+  keyof CompanyReportRow,
+  "company_id" | "company_name" | "total"
+>;
+
+export interface CompanyReportJobRow {
+  job_id: string;
+  dispatch_job_id: string | null;
+  lifecycle_status: string;
+  first_message_at: string;
+  appt_at: string | null;
+  address: string | null;
+  customer_name: string | null;
+  customer_phone: string | null;
+  job_type: string | null;
+  message_preview: string | null;
+}
+
+export interface CompanyReportJobsResponse {
+  start_date: string;
+  end_date: string;
+  company_id: string;
+  company_name: string;
+  bucket: CompanyReportBucket;
+  items: CompanyReportJobRow[];
+}

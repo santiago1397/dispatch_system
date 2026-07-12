@@ -6,10 +6,18 @@ request is computed live against ``jobs`` (see
 an ORM row here, just the response shape.
 """
 
-from datetime import date
+from datetime import date, datetime
 from uuid import UUID
 
 from app.schemas.base import BaseSchema
+
+REPORT_BUCKETS: tuple[str, ...] = (
+    "rejected",
+    "closed_completed",
+    "scheduled_another_day",
+    "canceled",
+    "still_open",
+)
 
 
 class CompanyReportRow(BaseSchema):
@@ -29,3 +37,28 @@ class CompanyReportResponse(BaseSchema):
     start_date: date
     end_date: date
     items: list[CompanyReportRow]
+
+
+class CompanyReportJobRow(BaseSchema):
+    """One job behind a single company/bucket cell of the report — lets an
+    operator confirm a job landed in the right bucket."""
+
+    job_id: UUID
+    dispatch_job_id: UUID | None
+    lifecycle_status: str
+    first_message_at: datetime
+    appt_at: datetime | None
+    address: str | None
+    customer_name: str | None
+    customer_phone: str | None
+    job_type: str | None
+    message_preview: str | None
+
+
+class CompanyReportJobsResponse(BaseSchema):
+    start_date: date
+    end_date: date
+    company_id: UUID
+    company_name: str
+    bucket: str
+    items: list[CompanyReportJobRow]

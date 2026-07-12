@@ -1,9 +1,18 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Button, Skeleton } from "@/components/ui";
-import { useCompanyReport } from "@/hooks";
-import type { CompanyReportRow } from "@/types";
+import {
+  Button,
+  Sheet,
+  SheetClose,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  Skeleton,
+} from "@/components/ui";
+import { useCompanyReport, useCompanyReportJobs } from "@/hooks";
+import { todayBusinessIso } from "@/lib/business-date";
+import type { CompanyReportBucket, CompanyReportRow } from "@/types";
 
 type Period = "day" | "week" | "month" | "custom";
 
@@ -14,9 +23,13 @@ const PERIOD_LABEL: Record<Period, string> = {
   custom: "Custom",
 };
 
-/** Today in UTC, ``YYYY-MM-DD`` — matches the backend's UTC day boundaries. */
+/**
+ * Today's Chicago business date, ``YYYY-MM-DD`` — matches the backend's
+ * 5am-to-midnight America/Chicago business-day boundaries (see
+ * `app.core.timezone` on the backend).
+ */
 function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
+  return todayBusinessIso();
 }
 
 function toIso(d: Date): string {
@@ -26,6 +39,12 @@ function toIso(d: Date): string {
 /** [start, end] (both inclusive) for the period containing ``pickedIso``.
  *  ``custom`` is handled separately by the caller — it has no single
  *  "picked" date to derive from.
+ *
+ *  ``pickedIso`` is a business-date key (see ``businessDateIso``), not a
+ *  live instant, so the arithmetic below just walks calendar dates —
+ *  the UTC-as-date-key trick avoids DST edge cases without needing
+ *  Chicago-awareness again here. Both week and month ranges are built
+ *  from consecutive business days, matching the single-day 5am cutoff.
  */
 function rangeForPeriod(period: Period, pickedIso: string): { start: string; end: string } {
   const picked = new Date(`${pickedIso}T00:00:00Z`);
@@ -35,7 +54,7 @@ function rangeForPeriod(period: Period, pickedIso: string): { start: string; end
   }
 
   if (period === "week") {
-    // Monday-Sunday week containing picked date (UTC).
+    // Monday-Sunday business week containing the picked business date.
     const dow = picked.getUTCDay(); // 0=Sun..6=Sat
     const mondayOffset = dow === 0 ? -6 : 1 - dow;
     const monday = new Date(picked);
@@ -52,7 +71,7 @@ function rangeForPeriod(period: Period, pickedIso: string): { start: string; end
 }
 
 const BUCKET_COLUMNS: {
-  key: keyof Omit<CompanyReportRow, "company_id" | "company_name" | "total">;
+  key: CompanyReportBucket;
   label: string;
 }[] = [
   { key: "still_open", label: "Still open" },
@@ -62,11 +81,19 @@ const BUCKET_COLUMNS: {
   { key: "rejected", label: "Rejected" },
 ];
 
+interface DrillDown {
+  companyId: string;
+  companyName: string;
+  bucket: CompanyReportBucket;
+  bucketLabel: string;
+}
+
 export default function ReportsPage() {
   const [period, setPeriod] = useState<Period>("day");
   const [pickedDate, setPickedDate] = useState<string>(todayIso());
   const [customStart, setCustomStart] = useState<string>(todayIso());
   const [customEnd, setCustomEnd] = useState<string>(todayIso());
+  const [drillDown, setDrillDown] = useState<DrillDown | null>(null);
 
   const { start, end } = useMemo(() => {
     if (period === "custom") {
@@ -195,7 +222,24 @@ export default function ReportsPage() {
                   <td className="px-3 py-2 font-medium">{row.company_name}</td>
                   {BUCKET_COLUMNS.map((c) => (
                     <td key={c.key} className="px-3 py-2 text-right tabular-nums">
-                      {row[c.key]}
+                      {row[c.key] > 0 ? (
+                        <button
+                          onClick={() =>
+                            setDrillDown({
+                              companyId: row.company_id,
+                              companyName: row.company_name,
+                              bucket: c.key,
+                              bucketLabel: c.label,
+                            })
+                          }
+                          className="hover:text-primary underline decoration-dotted underline-offset-2"
+                          title={`View ${c.label.toLowerCase()} jobs for ${row.company_name}`}
+                        >
+                          {row[c.key]}
+                        </button>
+                      ) : (
+                        row[c.key]
+                      )}
                     </td>
                   ))}
                   <td className="px-3 py-2 text-right font-semibold tabular-nums">
@@ -218,6 +262,103 @@ export default function ReportsPage() {
           </table>
         )}
       </div>
+
+      <Sheet open={drillDown !== null} onOpenChange={(open) => !open && setDrillDown(null)}>
+        {drillDown ? (
+          <SheetContent side="right" className="w-full max-w-xl">
+            <SheetHeader>
+              <div>
+                <SheetTitle>{drillDown.companyName}</SheetTitle>
+                <p className="text-muted-foreground mt-1 text-xs">
+                  {drillDown.bucketLabel} · {start === end ? start : `${start} → ${end}`}
+                </p>
+              </div>
+              <SheetClose onClick={() => setDrillDown(null)} />
+            </SheetHeader>
+            <DrillDownJobs
+              companyId={drillDown.companyId}
+              bucket={drillDown.bucket}
+              startDate={start}
+              endDate={end}
+            />
+          </SheetContent>
+        ) : null}
+      </Sheet>
+    </div>
+  );
+}
+
+function DrillDownJobs({
+  companyId,
+  bucket,
+  startDate,
+  endDate,
+}: {
+  companyId: string;
+  bucket: CompanyReportBucket;
+  startDate: string;
+  endDate: string;
+}) {
+  const { data, isLoading, isError } = useCompanyReportJobs({
+    company_id: companyId,
+    bucket,
+    start_date: startDate,
+    end_date: endDate,
+  });
+
+  const jobs = data?.items ?? [];
+
+  return (
+    <div className="flex-1 overflow-auto p-4">
+      {isLoading ? (
+        <div className="space-y-2">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-16 w-full" />
+          ))}
+        </div>
+      ) : isError ? (
+        <p className="text-muted-foreground text-center text-xs">
+          Failed to load jobs for this cell.
+        </p>
+      ) : jobs.length === 0 ? (
+        <p className="text-muted-foreground text-center text-xs">No jobs in this bucket.</p>
+      ) : (
+        <ul className="space-y-3">
+          {jobs.map((job) => (
+            <li key={job.job_id} className="rounded-md border p-3 text-xs">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-medium">{job.address ?? "No address"}</span>
+                <span className="bg-muted rounded px-1.5 py-0.5 font-mono text-[10px] uppercase">
+                  {job.lifecycle_status}
+                </span>
+              </div>
+              <div className="text-muted-foreground mt-1 flex flex-wrap gap-x-3 gap-y-1">
+                <span>Arrived {new Date(job.first_message_at).toLocaleString()}</span>
+                {job.appt_at ? (
+                  <span>Appt {new Date(job.appt_at).toLocaleString()}</span>
+                ) : null}
+                {job.job_type ? <span>{job.job_type}</span> : null}
+              </div>
+              {job.customer_name || job.customer_phone ? (
+                <div className="text-muted-foreground mt-1">
+                  {[job.customer_name, job.customer_phone].filter(Boolean).join(" · ")}
+                </div>
+              ) : null}
+              {job.message_preview ? (
+                <p className="mt-2 line-clamp-2 italic">&ldquo;{job.message_preview}&rdquo;</p>
+              ) : null}
+              {job.dispatch_job_id ? (
+                <a
+                  href={`/jobs/${job.dispatch_job_id}`}
+                  className="text-primary mt-2 inline-block underline"
+                >
+                  Open job →
+                </a>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

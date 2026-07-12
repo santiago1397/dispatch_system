@@ -11,6 +11,10 @@ interface ThreadListProps {
   onSelect: (counterparty: string) => void;
 }
 
+function displayNameFor(t: OpenPhoneThreadSummary): string {
+  return t.label || t.company_display_name || t.company_name || t.counterparty;
+}
+
 function formatLastActivity(iso: string): string {
   const d = new Date(iso);
   const now = new Date();
@@ -69,7 +73,7 @@ export function ThreadList({ activeCounterparty, onSelect }: ThreadListProps) {
               <Phone className="mt-0.5 h-4 w-4 shrink-0 opacity-70" />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="truncate font-medium">{t.counterparty}</span>
+                  <span className="truncate font-medium">{displayNameFor(t)}</span>
                   <span className="text-muted-foreground shrink-0 text-[10px]">
                     {formatLastActivity(t.last_created_at)}
                   </span>

@@ -7,8 +7,10 @@ dispatches), not job state. Resolved alerts stay in the table with
 
 Written by the ``AlertEngine.scan`` cron (every 5 minutes) and
 directly by Phase-3 ingestion paths when the dispatch detector cannot
-match a message to a Job (``dispatch_no_match``) or when tech-reply
-attribution is ambiguous (``unattributed_reply``).
+match a message to a Job (``dispatch_no_match``), when tech-reply
+attribution is ambiguous (``unattributed_reply``), or when a tech
+reply can't be attributed to any dispatch at all
+(``tech_reply_no_target``).
 """
 
 import uuid
@@ -41,6 +43,12 @@ class AlertKind(StrEnum):
     # hasn't filed the closing in the "Dispatch Closing" group yet.
     CLOSING_UNFILED = "closing_unfiled"
     UNATTRIBUTED_REPLY = "unattributed_reply"
+    # A tech reply couldn't be matched to ANY dispatch (no quote, and no
+    # operator dispatch found in the fallback window) — distinct from
+    # ``UNATTRIBUTED_REPLY`` (matched too many). Previously this case was
+    # silently logged and dropped, so an update like "on my way" could
+    # vanish with no signal that anything needed relaying to the company.
+    TECH_REPLY_NO_TARGET = "tech_reply_no_target"
     DISPATCH_NO_MATCH = "dispatch_no_match"
     # Dead-man's switch: no WhatsApp message has landed in
     # ALERTS_WHATSAPP_INGESTION_STALLED_MINUTES despite active tracked
@@ -59,7 +67,10 @@ class Alert(Base, TimestampMixin):
     """
 
     __tablename__ = "alerts"
-    __table_args__ = (Index("ix_alerts_kind_resolved_at_idx", "kind", "resolved_at"),)
+    __table_args__ = (
+        Index("ix_alerts_kind_resolved_at_idx", "kind", "resolved_at"),
+        Index("ix_alerts_resolved_at_seen_at_idx", "resolved_at", "seen_at"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     job_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -72,6 +83,11 @@ class Alert(Base, TimestampMixin):
     threshold_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set the first time an operator has viewed the open-alerts list (the
+    # navbar badge counts only rows where this is still null). Distinct
+    # from ``resolved_at``: an alert can be seen but still unsolved, so the
+    # dashboard's own "unsolved" count keeps using ``resolved_at IS NULL``.
+    seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),

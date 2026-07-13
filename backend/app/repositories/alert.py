@@ -10,7 +10,7 @@ spamming the dashboard with duplicates.
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.alert import Alert, AlertKind
@@ -138,6 +138,38 @@ async def count_open(
     return result.scalar_one()
 
 
+async def count_unseen(
+    db: AsyncSession,
+    *,
+    kinds: list[str] | None = None,
+) -> int:
+    """Count open alerts an operator hasn't viewed yet (for the navbar badge)."""
+    query = (
+        select(func.count())
+        .select_from(Alert)
+        .where(Alert.resolved_at.is_(None), Alert.seen_at.is_(None))
+    )
+    if kinds is not None:
+        query = query.where(Alert.kind.in_(kinds))
+    result = await db.execute(query)
+    return result.scalar_one()
+
+
+async def mark_all_seen(db: AsyncSession) -> int:
+    """Mark every open, unseen alert as seen. Returns the number updated.
+
+    Called when the operator opens the Alerts dashboard — viewing the
+    open queue is what "seen" means here, distinct from resolving.
+    """
+    now = datetime.now(UTC)
+    result = await db.execute(
+        update(Alert)
+        .where(Alert.resolved_at.is_(None), Alert.seen_at.is_(None))
+        .values(seen_at=now)
+    )
+    return result.rowcount or 0
+
+
 async def resolve(
     db: AsyncSession,
     alert: Alert,
@@ -193,9 +225,11 @@ __all__ = [
     "AlertKind",
     "auto_resolve_for_job",
     "count_open",
+    "count_unseen",
     "create_or_get_open",
     "get_by_id",
     "list_open",
     "list_recent",
+    "mark_all_seen",
     "resolve",
 ]

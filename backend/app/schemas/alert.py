@@ -41,6 +41,7 @@ class AlertRead(TimestampSchema):
     threshold_minutes: int | None = None
     detected_at: datetime
     resolved_at: datetime | None = None
+    seen_at: datetime | None = None
     resolved_by_user_id: UUID | None = None
     payload: dict = Field(default_factory=dict)
     # Resolved parent-Job summary (company, address, originating message).
@@ -50,4 +51,13 @@ class AlertRead(TimestampSchema):
 
 class AlertList(BaseSchema):
     items: list[AlertRead]
+    # Unresolved count — the dashboard's "unsolved" figure. Unaffected by
+    # whether the operator has viewed the alert yet.
     total: int
+    # Unresolved AND unseen — what the navbar badge shows. Always 0 on the
+    # ``resolved=true`` (audit) view, since "seen" only tracks the open queue.
+    unseen: int = 0
+
+
+class AlertMarkSeenResult(BaseSchema):
+    marked: int

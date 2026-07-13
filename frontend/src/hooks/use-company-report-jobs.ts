@@ -11,6 +11,8 @@ export interface CompanyReportJobsFilters {
   bucket: CompanyReportBucket | "total";
   start_date: string;
   end_date: string;
+  /** Must match the toggle used for the breakdown call this drills into. */
+  include_scheduled_appts?: boolean;
 }
 
 /**
@@ -29,6 +31,7 @@ export function useCompanyReportJobs(filters: CompanyReportJobsFilters | null) {
           ...(filters!.bucket !== "total" ? { bucket: filters!.bucket } : {}),
           start_date: filters!.start_date,
           end_date: filters!.end_date,
+          ...(filters!.include_scheduled_appts ? { include_scheduled_appts: "true" } : {}),
         },
       }),
     enabled: filters !== null,

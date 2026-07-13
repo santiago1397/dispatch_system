@@ -146,6 +146,25 @@ def test_repaste_with_genuine_decline_note_still_rejects() -> None:
     assert reject_detector.is_reject_signal(reply, JOB_BODY) is True
 
 
+@pytest.mark.parametrize(
+    "note",
+    [
+        "Appt\n11:30 am",
+        "Appt tomorrow 10:30 am",
+        "appointment set for 2pm",
+        "tomorrow 9am",
+    ],
+)
+def test_repaste_with_appt_note_is_not_reject(note: str) -> None:
+    # Regression: a re-pasted job body plus an appended appointment time
+    # ("Appt tomorrow 10:30 am") was being read as an operator decline —
+    # the opposite of what it means. Job PDL TUKZD / Kimberly / 2300
+    # College Green Drive, Elgin IL was wrongly marked `rejected` this way.
+    reply = JOB_BODY + "\n" + note
+    assert reject_detector.is_repaste_with_note(reply, JOB_BODY) is False
+    assert reject_detector.is_reject_signal(reply, JOB_BODY) is False
+
+
 # ---------------------------------------------------------------------------
 # Orchestration: WhatsappService._maybe_reject_job
 # ---------------------------------------------------------------------------

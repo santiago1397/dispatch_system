@@ -52,36 +52,49 @@ _NON_COMPLETABLE = {
 }
 
 # Settlement vocabulary. A closing signal needs a payment KEYWORD *and* an
-# AMOUNT — both are present in every real example, and requiring both keeps
-# a bare address re-paste (operator dispatch) from tripping the gate.
+# AMOUNT sitting right next to each other — every real example has them
+# adjacent ("Paid $600", "Close 240 cash", "4100$cc"). Matching keyword and
+# amount independently anywhere in the body is too loose: a re-pasted job
+# block routinely contains a stray keyword (e.g. a footer note that just
+# says "Close") plus unrelated digits elsewhere (phone number, zip, street
+# number) that would otherwise satisfy the amount side by coincidence.
 # NOTE: "check" (the payment method) is deliberately excluded — it collides
 # with the common dispatch verb ("check the meter") and wasn't among the
 # operator's real closing examples. The existing-Job match is the real guard,
 # but keeping the vocabulary tight avoids needless gate entries.
-_KEYWORD_RE = re.compile(
-    r"\b(paid|pay|parts?|tip|cash|cc|zelle|venmo|card|charged|collected|total|closed?)\b",
-    re.IGNORECASE,
-)
+_KEYWORD = r"(?:paid|pay|parts?|tip|cash|cc|zelle|venmo|card|charged|collected|total|closed?)"
 # ``$600`` / ``600$`` / ``325.5`` / ``36.60`` / ``4100`` — a currency-marked
 # amount, or a bare number of 2+ digits (so a lone "1" doesn't count).
-_AMOUNT_RE = re.compile(r"\$\s?\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?\s?\$|\b\d{2,}(?:[.,]\d+)?\b")
+_AMOUNT = r"(?:\$\s?\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?\s?\$|\d{2,}(?:[.,]\d+)?)"
+# Keyword and amount within a short span of each other, in either order,
+# separated only by punctuation/whitespace (e.g. "Paid:$600", "149 cash").
+_SETTLEMENT_RE = re.compile(
+    rf"\b{_KEYWORD}\b[\s:]{{0,10}}{_AMOUNT}\b|\b{_AMOUNT}\b[\s:]{{0,10}}\b{_KEYWORD}\b",
+    re.IGNORECASE,
+)
+# The structured job block's "Addr:" line — e.g. "Addr: 1908 N Cambridge Ct
+# 3a, Palatine, IL, 60074". ``normalize_address`` expects a bare address
+# string (it treats everything before the first comma as the street line);
+# handing it the whole multi-line re-pasted job block instead makes that
+# first "chunk" the entire "Co: ...\nPDL: ...\nAddr: ..." blob, which never
+# matches the leading-street-number pattern, so street_number/street_name
+# silently come back None and the job lookup falls back to phone-only
+# matching. Pull just the address line out first.
+_ADDR_LINE_RE = re.compile(r"(?im)^\s*addr(?:ess)?\s*:\s*(.+)$")
 
 
 def detect_payment_tokens(body: str) -> list[str] | None:
-    """Return the matched settlement tokens, or ``None`` if not a closing signal.
+    """Return the matched settlement snippets, or ``None`` if not a closing signal.
 
-    A message qualifies when it contains at least one payment keyword AND at
-    least one amount token. The returned list (keyword + amount matches) is
-    stored on the lifecycle event payload for audit.
+    A message qualifies when it contains a payment keyword and an amount
+    adjacent to each other (e.g. "Paid $600", "Close 240 cash"). The matched
+    snippets are stored on the lifecycle event payload for audit.
     """
     text = body or ""
-    keywords = _KEYWORD_RE.findall(text)
-    if not keywords:
+    matches = [m.group(0).strip().lower() for m in _SETTLEMENT_RE.finditer(text)]
+    if not matches:
         return None
-    amounts = _AMOUNT_RE.findall(text)
-    if not amounts:
-        return None
-    return [*(k.lower() for k in keywords), *amounts]
+    return matches
 
 
 class ClosingSignalService:
@@ -126,7 +139,9 @@ class ClosingSignalService:
         if tokens is None:
             return False
 
-        normalized = normalize_address(body)
+        addr_line_match = _ADDR_LINE_RE.search(body or "")
+        address_text = addr_line_match.group(1) if addr_line_match else body
+        normalized = normalize_address(address_text)
         phone_match = PHONE_PATTERN.search(body or "")
         phone_e164 = normalize_phone(phone_match.group(0)) if phone_match else None
 

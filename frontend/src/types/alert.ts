@@ -18,6 +18,7 @@ export const ALERT_KINDS = [
   "closing_unfiled",
   "dispatch_no_match",
   "unattributed_reply",
+  "tech_reply_no_target",
   "whatsapp_ingestion_stalled",
 ] as const;
 
@@ -34,6 +35,7 @@ export const ALERT_KIND_LABEL: Record<AlertKind, string> = {
   closing_unfiled: "Closing unfiled",
   dispatch_no_match: "Dispatch no match",
   unattributed_reply: "Unattributed reply",
+  tech_reply_no_target: "Tech reply unmatched",
   whatsapp_ingestion_stalled: "WhatsApp not syncing",
 };
 
@@ -63,6 +65,7 @@ export interface Alert {
   threshold_minutes: number | null;
   detected_at: string;
   resolved_at: string | null;
+  seen_at: string | null;
   resolved_by_user_id: string | null;
   payload: Record<string, unknown>;
   job: AlertJobSummary | null;
@@ -72,5 +75,8 @@ export interface Alert {
 
 export interface AlertList {
   items: Alert[];
+  /** Unresolved count — the "unsolved" figure shown inside the dashboard. */
   total: number;
+  /** Unresolved AND unseen — what the navbar badge shows. */
+  unseen: number;
 }

@@ -17,7 +17,13 @@ export async function GET(request: NextRequest) {
 
     const sp = request.nextUrl.searchParams;
     const params = new URLSearchParams();
-    for (const key of ["company_id", "bucket", "start_date", "end_date"]) {
+    for (const key of [
+      "company_id",
+      "bucket",
+      "start_date",
+      "end_date",
+      "include_scheduled_appts",
+    ]) {
       const v = sp.get(key);
       if (v) params.set(key, v);
     }

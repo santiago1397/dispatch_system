@@ -22,7 +22,7 @@ from app.api.deps import CurrentUser, DBSession
 from app.core.exceptions import NotFoundError
 from app.repositories import alert as alert_repo
 from app.repositories import job as job_repo
-from app.schemas.alert import AlertJobSummary, AlertList, AlertRead
+from app.schemas.alert import AlertJobSummary, AlertList, AlertMarkSeenResult, AlertRead
 
 router = APIRouter()
 
@@ -91,12 +91,33 @@ async def list_alerts(
             db, limit=limit, offset=offset, include_resolved=True, job_ids=job_ids
         )
         total = len(items)  # naive but small enough for a v1
+        unseen = 0  # "seen" only tracks the open queue, not the audit view
     else:
         items = await alert_repo.list_open(
             db, kinds=kinds, job_ids=job_ids, limit=limit, offset=offset
         )
         total = await alert_repo.count_open(db, kinds=kinds, job_ids=job_ids)
-    return AlertList(items=await _read_list(db, items), total=total)
+        unseen = await alert_repo.count_unseen(db, kinds=kinds)
+    return AlertList(items=await _read_list(db, items), total=total, unseen=unseen)
+
+
+@router.post(
+    "/mark-seen",
+    response_model=AlertMarkSeenResult,
+    summary="Mark all open alerts as seen",
+)
+async def mark_alerts_seen(
+    db: DBSession,
+    _user: CurrentUser,
+):
+    """Clear the navbar's unseen count by marking every open alert as seen.
+
+    Called when the operator opens the Alerts dashboard. Does not resolve
+    anything — an alert can be seen and still unsolved.
+    """
+    marked = await alert_repo.mark_all_seen(db)
+    await db.commit()
+    return AlertMarkSeenResult(marked=marked)
 
 
 @router.get(

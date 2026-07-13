@@ -144,8 +144,7 @@ export function useJobLifecycle(id: string | null) {
 export function useSetLifecycleStatus(id: string) {
   const qc = useQueryClient();
   return useMutation<DispatchJob, ApiError, LifecycleTransitionInput>({
-    mutationFn: (body) =>
-      apiClient.patch<DispatchJob>(API_ROUTES.JOBS_LIFECYCLE(id), { body }),
+    mutationFn: (body) => apiClient.patch<DispatchJob>(API_ROUTES.JOBS_LIFECYCLE(id), body),
     onSuccess: (data) => {
       qc.setQueryData(["dispatch-job", id], data);
       void qc.invalidateQueries({ queryKey: ["dispatch-jobs"] });

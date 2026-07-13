@@ -24,6 +24,8 @@ const STYLE: Record<AlertKind, string> = {
     "bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-200",
   unattributed_reply:
     "bg-pink-100 text-pink-800 dark:bg-pink-900/40 dark:text-pink-200",
+  tech_reply_no_target:
+    "bg-fuchsia-100 text-fuchsia-800 dark:bg-fuchsia-900/40 dark:text-fuchsia-200",
   whatsapp_ingestion_stalled:
     "bg-slate-200 text-slate-900 dark:bg-slate-800 dark:text-slate-100",
 };

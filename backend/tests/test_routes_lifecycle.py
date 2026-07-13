@@ -157,6 +157,10 @@ class TestAlertsList:
                 "app.repositories.alert.count_open",
                 new=AsyncMock(return_value=0),
             ) as co,
+            patch(
+                "app.repositories.alert.count_unseen",
+                new=AsyncMock(return_value=0),
+            ) as cu,
         ):
             result = await list_alerts(
                 db=db,
@@ -170,7 +174,9 @@ class TestAlertsList:
 
         lo.assert_called_once()
         co.assert_called_once()
+        cu.assert_called_once()
         assert result.total == 0
+        assert result.unseen == 0
 
     @pytest.mark.anyio
     async def test_search_with_no_matching_jobs_short_circuits(self):
@@ -226,6 +232,10 @@ class TestAlertsList:
                 "app.repositories.alert.count_open",
                 new=AsyncMock(return_value=0),
             ) as co,
+            patch(
+                "app.repositories.alert.count_unseen",
+                new=AsyncMock(return_value=0),
+            ) as cu,
         ):
             await list_alerts(
                 db=db,
@@ -239,6 +249,7 @@ class TestAlertsList:
 
         lo.assert_called_once_with(db, kinds=None, job_ids=[job_id], limit=100, offset=0)
         co.assert_called_once_with(db, kinds=None, job_ids=[job_id])
+        cu.assert_called_once_with(db, kinds=None)
 
 
 class TestAlertsResolve:

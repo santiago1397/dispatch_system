@@ -111,11 +111,57 @@ _DATA_QUESTION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A re-paste's appended note that reads as an appointment confirmation
+# ("Appt 11:30 am", "Appt tomorrow 10:30 am") is NOT a decline — the
+# operator is reporting that a time was set, the opposite of passing on the
+# job. Regression: "PDL: TUKZD" / Kimberly / 2300 College Green Drive job
+# was marked ``rejected`` off a re-paste whose only added text was an
+# appointment time with no "?" and no data-quality wording, so the existing
+# _DATA_QUESTION_RE veto didn't cover it.
+_APPT_NOTE_RE = re.compile(
+    r"\bappt\b|\bappointment\b|\btomorrow\b|\btmrw\b|\btomm?orow\b"
+    r"|\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b",
+    re.IGNORECASE,
+)
+
+# A re-paste's appended note that reads as a payment/settlement report
+# ("Total: 174$ cc", "Paid $600", "4100$cc SADAN") is NOT a decline — the
+# tech is closing the job out, the opposite of passing on it. This mirrors
+# the keyword+amount adjacency check in ``closing_signal.py``'s
+# ``_SETTLEMENT_RE``; kept as a separate, duplicated pattern here (rather
+# than importing ``closing_signal``) to keep this module's pure/allocation
+# -free import graph free of that module's DB-session-dependent services.
+# Regression: "Total: 174$ cc" / "1908 N Cambridge Ct 3a" job was marked
+# ``rejected`` off a closing re-paste because the closing-signal gate
+# missed it (separate address-extraction bug) and this note matched
+# neither the data-question nor the appointment veto.
+_PAYMENT_NOTE_KEYWORD = (
+    r"(?:paid|pay|parts?|tip|cash|cc|zelle|venmo|card|charged|collected|total|closed?)"
+)
+_PAYMENT_NOTE_AMOUNT = r"(?:\$\s?\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?\s?\$|\d{2,}(?:[.,]\d+)?)"
+_PAYMENT_NOTE_RE = re.compile(
+    rf"\b{_PAYMENT_NOTE_KEYWORD}\b[\s:]{{0,10}}{_PAYMENT_NOTE_AMOUNT}\b"
+    rf"|\b{_PAYMENT_NOTE_AMOUNT}\b[\s:]{{0,10}}\b{_PAYMENT_NOTE_KEYWORD}\b",
+    re.IGNORECASE,
+)
+
 
 def _looks_like_data_question(body: str) -> bool:
     """True if ``body`` reads as a question / data-correction request
     rather than a job decline (see :data:`_DATA_QUESTION_RE`)."""
     return bool(_DATA_QUESTION_RE.search(body))
+
+
+def _looks_like_appt_note(body: str) -> bool:
+    """True if ``body`` reads as an appointment confirmation rather than a
+    job decline (see :data:`_APPT_NOTE_RE`)."""
+    return bool(_APPT_NOTE_RE.search(body))
+
+
+def _looks_like_payment_note(body: str) -> bool:
+    """True if ``body`` reads as a payment/settlement report rather than a
+    job decline (see :data:`_PAYMENT_NOTE_RE`)."""
+    return bool(_PAYMENT_NOTE_RE.search(body))
 
 
 def _normalize(text: str) -> str:
@@ -187,9 +233,12 @@ def is_repaste_with_note(body: str, job_body: str) -> bool:
        least as long as it (i.e. it re-pastes then appends).
 
     Either path is vetoed when the note itself reads as a question or a
-    data-correction request (see :func:`_looks_like_data_question`) rather
+    data-correction request (see :func:`_looks_like_data_question`), as an
+    appointment confirmation (see :func:`_looks_like_appt_note`), or as a
+    payment/settlement report (see :func:`_looks_like_payment_note`) rather
     than an actual decline — an operator flagging "wrong number, pls
-    check" back to the source chat is not passing on the job.
+    check", reporting "Appt tomorrow 10:30 am", or a tech closing out with
+    "Total: 174$ cc" back to the source chat is not passing on the job.
     """
     job_norm = _normalize(job_body)
     reply_norm = _normalize(body)
@@ -200,17 +249,24 @@ def is_repaste_with_note(body: str, job_body: str) -> bool:
     if reply_norm == job_norm:
         return False
 
+    def _not_vetoed() -> bool:
+        return not (
+            _looks_like_data_question(body)
+            or _looks_like_appt_note(body)
+            or _looks_like_payment_note(body)
+        )
+
     if job_norm in reply_norm:
         extra = len(reply_norm) - len(job_norm)
         if not (0 < extra <= _REPASTE_NOTE_MAX_CHARS):
             return False
-        return not _looks_like_data_question(body)
+        return _not_vetoed()
 
     if len(reply_norm) >= len(job_norm):
         ratio = SequenceMatcher(None, job_norm, reply_norm).ratio()
         if ratio < _REPASTE_SIMILARITY_THRESHOLD:
             return False
-        return not _looks_like_data_question(body)
+        return _not_vetoed()
     return False
 
 

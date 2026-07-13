@@ -22,6 +22,7 @@ from app.core.security import (
     verify_api_key,
     verify_token,
 )
+from app.core.timezone import BUSINESS_TZ
 from app.db.models.whatsapp import WhatsappMessage, WhatsappTrackedChat
 from app.schemas.whatsapp import (
     WhatsappMessageBatchIngest,
@@ -323,6 +324,12 @@ class TestIngestBatch:
         ``first_message_at``/lifecycle-event anchoring whenever the
         extension mirrors a backlog batch long after the messages were
         actually sent. See ``app/services/classification.py:_message_timestamp``.
+
+        ``real_time`` here stands in for what the extension actually sends:
+        WhatsApp Web's displayed local (Chicago) time mislabeled with a
+        UTC offset (see ``WhatsappMessageCreate._fix_extension_utc_mislabel``).
+        The value that must survive into ``incoming_messages`` is the
+        *corrected* UTC instant, not the raw mislabeled one.
         """
         from unittest.mock import MagicMock
 
@@ -380,7 +387,8 @@ class TestIngestBatch:
             await service.ingest_batch(payload, batch_id="b1")
 
         raw_payload = create_incoming.call_args.kwargs["raw_payload"]
-        assert raw_payload["timestamp"] == real_time.isoformat()
+        expected_time = real_time.replace(tzinfo=BUSINESS_TZ).astimezone(UTC)
+        assert raw_payload["timestamp"] == expected_time.isoformat()
 
 
 # =============================================================================

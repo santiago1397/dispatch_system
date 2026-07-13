@@ -48,6 +48,23 @@ class TestDetectPaymentTokens:
         ):
             assert detect_payment_tokens(body) is None, body
 
+    def test_does_not_fire_on_repasted_job_with_unrelated_keyword(self):
+        # Regression: a re-pasted dispatch block whose footer note is just
+        # "Close" (no amount) must not fire on unrelated digits elsewhere in
+        # the block (phone number, zip, street number).
+        body = (
+            "Co: Always 24/7\n"
+            "PDL: CV8IC\n"
+            "N: ann\n"
+            "Ph: 6175153471 \n"
+            "Addr: 177 Dewindt Rd , Winnetka, IL, 60093\n"
+            "Desc: Bedroom Lockout\n"
+            "Occu: Locksmith\n\n"
+            "Notes:\n\n"
+            "Close"
+        )
+        assert detect_payment_tokens(body) is None, body
+
 
 class TestGate:
     @pytest.mark.anyio

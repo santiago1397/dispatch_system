@@ -556,14 +556,42 @@ def _status_bucket_case():
 _JOB_DETAIL_LIMIT = 500
 
 
+def _in_range_membership(start: datetime, end: datetime, *, include_scheduled_appts: bool):
+    """The Job membership filter for the report's date range.
+
+    Base case: ``first_message_at`` falls in ``[start, end)`` — a job is
+    anchored to the day it *arrived*.
+
+    When ``include_scheduled_appts`` is set, membership widens to also
+    include jobs that arrived on a *different* business day but whose
+    appointment (``appt_at``) lands in ``[start, end)`` — i.e. exactly the
+    jobs the base case already tags ``scheduled_another_day`` from the
+    arrival day's perspective, now also surfaced from the appointment
+    day's perspective. The "different business day" guard is what keeps
+    same-day arrival+appointment jobs from being counted twice (they're
+    already covered by the base ``first_message_at`` clause).
+    """
+    arrived_in_range = and_(Job.first_message_at >= start, Job.first_message_at < end)
+    if not include_scheduled_appts:
+        return arrived_in_range
+
+    appt_in_range = and_(
+        Job.appt_at.is_not(None),
+        Job.appt_at >= start,
+        Job.appt_at < end,
+        _business_day_expr(Job.appt_at) != _business_day_expr(Job.first_message_at),
+    )
+    return or_(arrived_in_range, appt_in_range)
+
+
 async def get_company_status_breakdown(
     db: AsyncSession,
     *,
     start: datetime,
     end: datetime,
+    include_scheduled_appts: bool = False,
 ) -> list[tuple[uuid.UUID, str, int]]:
-    """Bucket every Job whose ``first_message_at`` falls in ``[start, end)``
-    into one of 5 outcome buckets, grouped by company.
+    """Bucket every Job in range into one of 5 outcome buckets, grouped by company.
 
     A job is anchored to the day it *arrived*, not the day its status last
     changed — so a job that arrives on day X and closes 3 days later still
@@ -571,6 +599,12 @@ async def get_company_status_breakdown(
     ``still_open``. "Day" means the Chicago business day (5am-to-midnight,
     see ``app.core.timezone``), not a UTC calendar day. See
     ``_status_bucket_case`` for the bucket rules.
+
+    When ``include_scheduled_appts`` is true, the range membership widens
+    per :func:`_in_range_membership` to also pull in jobs whose
+    *appointment* (not arrival) lands in range — e.g. a job that arrived
+    last week for a job scheduled today shows up in today's counts,
+    whatever its current status (still pending, or already closed today).
 
     Returns ``(company_id, bucket, count)`` rows. Jobs with no company
     match (``company_id IS NULL``) are excluded — they never reached
@@ -582,8 +616,7 @@ async def get_company_status_breakdown(
         select(Job.company_id, bucket, func.count().label("count"))
         .where(
             Job.company_id.is_not(None),
-            Job.first_message_at >= start,
-            Job.first_message_at < end,
+            _in_range_membership(start, end, include_scheduled_appts=include_scheduled_appts),
         )
         .group_by(Job.company_id, bucket)
     )
@@ -598,22 +631,28 @@ async def get_company_status_jobs(
     end: datetime,
     company_id: uuid.UUID,
     bucket: str | None = None,
+    include_scheduled_appts: bool = False,
 ) -> list[dict]:
     """Detail rows behind one cell (or the whole row) of
     ``get_company_status_breakdown``.
 
-    Uses the exact same ``_status_bucket_case`` classification, filtered
-    down to a single company, so operators can audit *which* jobs landed in
-    a bucket instead of trusting the count alone. Pass ``bucket=None`` for
-    the "Total" column — every job for the company in range, regardless of
-    bucket. Ordered by ``first_message_at`` ascending (the order jobs
-    actually arrived), capped at ``_JOB_DETAIL_LIMIT`` rows.
+    Uses the exact same ``_status_bucket_case`` classification and the same
+    ``_in_range_membership`` range widening, filtered down to a single
+    company, so operators can audit *which* jobs landed in a bucket instead
+    of trusting the count alone. Pass ``bucket=None`` for the "Total"
+    column — every job for the company in range, regardless of bucket.
+    Ordered by ``first_message_at`` ascending (the order jobs actually
+    arrived), capped at ``_JOB_DETAIL_LIMIT`` rows.
+
+    Each row carries ``matched_by``: ``"arrival"`` if the job's
+    ``first_message_at`` is what put it in range, ``"appointment"`` if it
+    only qualifies because ``appt_at`` lands in range (arrived on a
+    different day) — so the UI can flag those rows distinctly.
     """
     bucket_expr = _status_bucket_case().label("bucket")
     conditions = [
         Job.company_id == company_id,
-        Job.first_message_at >= start,
-        Job.first_message_at < end,
+        _in_range_membership(start, end, include_scheduled_appts=include_scheduled_appts),
     ]
     if bucket is not None:
         conditions.append(_status_bucket_case() == bucket)
@@ -653,12 +692,14 @@ async def get_company_status_jobs(
         preview = None
         if message is not None and message.content:
             preview = message.content[:200]
+        arrived_in_range = start <= job.first_message_at < end
         rows.append(
             {
                 "job_id": job.id,
                 "dispatch_job_id": origin.id if origin is not None else None,
                 "bucket": bucket_by_job[job.id],
                 "lifecycle_status": job.lifecycle_status,
+                "matched_by": "arrival" if arrived_in_range else "appointment",
                 "first_message_at": job.first_message_at,
                 "appt_at": job.appt_at,
                 "address": address or None,

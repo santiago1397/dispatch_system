@@ -375,9 +375,20 @@ class TestParseTechReply:
         db.execute = AsyncMock(return_value=_scalars_result([]))
 
         msg = _make_wa_message(quoted_wa_message_id=None)
-        source, intent = await parse_tech_reply(db, wa_message=msg)
+
+        alert_create = AsyncMock()
+        with patch(
+            "app.services.tech_reply_parser.alert_repo.create_or_get_open",
+            new=alert_create,
+        ):
+            source, intent = await parse_tech_reply(db, wa_message=msg)
+
         assert source == "no_target"
         assert intent is None
+        alert_create.assert_awaited_once()
+        kwargs = alert_create.await_args.kwargs
+        assert kwargs["kind"] == "tech_reply_no_target"
+        assert kwargs["chat_jid"] == msg.chat_jid
 
     @pytest.mark.anyio
     async def test_ambiguous_fallback_emits_alert_and_aborts(self):

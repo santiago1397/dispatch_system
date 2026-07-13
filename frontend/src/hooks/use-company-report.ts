@@ -8,6 +8,12 @@ import type { CompanyReportResponse } from "@/types";
 export interface CompanyReportFilters {
   start_date: string;
   end_date: string;
+  /**
+   * Also count jobs that arrived on a different day but whose
+   * appointment lands in [start_date, end_date] — e.g. a job scheduled
+   * for today that was dispatched last week.
+   */
+  include_scheduled_appts?: boolean;
 }
 
 /**
@@ -24,6 +30,7 @@ export function useCompanyReport(filters: CompanyReportFilters) {
         params: {
           start_date: filters.start_date,
           end_date: filters.end_date,
+          ...(filters.include_scheduled_appts ? { include_scheduled_appts: "true" } : {}),
         },
       }),
     refetchInterval: 30_000,

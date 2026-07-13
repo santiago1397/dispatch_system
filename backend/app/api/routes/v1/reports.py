@@ -41,6 +41,15 @@ async def company_status_report(
         default_factory=business_today,
         description="Last day (inclusive) of the range. Defaults to today.",
     ),
+    include_scheduled_appts: bool = Query(
+        default=False,
+        description=(
+            "Also count jobs that arrived on a different day but whose "
+            "appointment lands in [start_date, end_date] — e.g. a job "
+            "scheduled for today that was dispatched last week, whatever "
+            "its current status. Off by default (arrival-day counts only)."
+        ),
+    ),
 ):
     """Bucket every job that arrived in ``[start_date, end_date]`` into
     rejected / closed-or-completed / scheduled-for-another-day / canceled /
@@ -58,7 +67,12 @@ async def company_status_report(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"date range cannot exceed {_MAX_RANGE_DAYS} days",
         )
-    return await get_company_report(db, start_date=start_date, end_date=end_date)
+    return await get_company_report(
+        db,
+        start_date=start_date,
+        end_date=end_date,
+        include_scheduled_appts=include_scheduled_appts,
+    )
 
 
 @router.get(
@@ -84,6 +98,14 @@ async def company_status_report_jobs(
     end_date: date = Query(
         default_factory=business_today,
         description="Last day (inclusive) of the range. Defaults to today.",
+    ),
+    include_scheduled_appts: bool = Query(
+        default=False,
+        description=(
+            "Match the toggle used for the breakdown call this drills "
+            "into — also include jobs whose appointment (not arrival) "
+            "lands in [start_date, end_date]."
+        ),
     ),
 ):
     """List the individual jobs classified into ``bucket`` for ``company_id``
@@ -112,4 +134,5 @@ async def company_status_report_jobs(
         end_date=end_date,
         company_id=company_id,
         bucket=bucket,
+        include_scheduled_appts=include_scheduled_appts,
     )

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Check, ExternalLink, Search, X } from "lucide-react";
 import { Button, Input, Skeleton } from "@/components/ui";
-import { useAlerts, useResolveAlert } from "@/hooks";
+import { useAlerts, useMarkAlertsSeen, useResolveAlert } from "@/hooks";
 import { formatDateTime } from "@/lib/utils";
 import { describeAlert } from "@/lib/alert-reason";
 import { AlertKindBadge } from "@/components/alerts/alert-kind-badge";
@@ -27,6 +27,17 @@ export default function AlertsPage() {
   });
   const rows = useMemo(() => data?.items ?? [], [data]);
 
+  // Opening this page is what "seen" means — clear the navbar badge, but
+  // only once per unseen batch (the mutation's own invalidation will drop
+  // `unseen` back to 0, so this doesn't loop).
+  const markSeen = useMarkAlertsSeen();
+  useEffect(() => {
+    if (!includeResolved && (data?.unseen ?? 0) > 0 && !markSeen.isPending) {
+      markSeen.mutate();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [includeResolved, data?.unseen]);
+
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   return (
@@ -34,9 +45,16 @@ export default function AlertsPage() {
       <div className="flex flex-col gap-3 border-b px-4 py-3 sm:px-6">
         <div className="flex items-start justify-between gap-2">
           <div>
-            <h1 className="text-sm font-semibold tracking-wide uppercase">
-              Alerts
-            </h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-sm font-semibold tracking-wide uppercase">
+                Alerts
+              </h1>
+              {!includeResolved && data ? (
+                <span className="bg-muted text-muted-foreground rounded-full px-2 py-0.5 text-[11px] font-medium">
+                  {data.total} unsolved
+                </span>
+              ) : null}
+            </div>
             <p className="text-muted-foreground mt-1 text-xs">
               Pipeline-health issues the alert engine has surfaced. Resolve
               once the underlying condition has been handled.

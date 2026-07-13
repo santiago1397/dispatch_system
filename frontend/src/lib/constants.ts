@@ -68,6 +68,7 @@ export const API_ROUTES = {
   ALERTS: "/alerts",
   ALERT: (id: string) => `/alerts/${id}`,
   ALERT_RESOLVE: (id: string) => `/alerts/${id}/resolve`,
+  ALERTS_MARK_SEEN: "/alerts/mark-seen",
 
   // Daily stats — pre-computed rollups + CSV/JSON export.
   STATS: "/stats",

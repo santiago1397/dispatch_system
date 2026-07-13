@@ -34,6 +34,12 @@ export interface CompanyReportJobRow {
   dispatch_job_id: string | null;
   bucket: CompanyReportBucket;
   lifecycle_status: string;
+  /**
+   * "arrival" if first_message_at put this job in range; "appointment" if
+   * it only qualifies because appt_at lands in range (arrived on a
+   * different day) — only meaningful when include_scheduled_appts was on.
+   */
+  matched_by: "arrival" | "appointment";
   first_message_at: string;
   appt_at: string | null;
   address: string | null;

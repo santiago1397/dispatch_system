@@ -75,6 +75,12 @@ export function describeAlert(alert: Alert): string {
       return `An operator dispatch message couldn't be matched to any pending job.`;
     case "unattributed_reply":
       return `A technician reply matched more than one job, so it couldn't be attributed automatically.`;
+    case "tech_reply_no_target": {
+      const preview = str(p, "body_preview");
+      return preview
+        ? `A technician reply ("${preview}") couldn't be matched to any dispatched job — it may need to be relayed to the company manually.`
+        : `A technician reply couldn't be matched to any dispatched job — it may need to be relayed to the company manually.`;
+    }
     case "whatsapp_ingestion_stalled": {
       const lastMsg = when(str(p, "last_message_at"));
       return lastMsg

@@ -98,6 +98,7 @@ export default function ReportsPage() {
   const [customStart, setCustomStart] = useState<string>(todayIso());
   const [customEnd, setCustomEnd] = useState<string>(todayIso());
   const [drillDown, setDrillDown] = useState<DrillDown | null>(null);
+  const [includeScheduledAppts, setIncludeScheduledAppts] = useState(false);
 
   const { start, end } = useMemo(() => {
     if (period === "custom") {
@@ -113,6 +114,7 @@ export default function ReportsPage() {
   const { data, isLoading, isError, refetch, dataUpdatedAt } = useCompanyReport({
     start_date: start,
     end_date: end,
+    include_scheduled_appts: includeScheduledAppts,
   });
 
   const rows = data?.items ?? [];
@@ -179,6 +181,18 @@ export default function ReportsPage() {
               className="border-input bg-background h-8 rounded-md border px-2 text-sm"
             />
           )}
+          <label
+            className="border-input bg-background flex h-8 items-center gap-1.5 rounded-md border px-2 text-xs"
+            title="Also count jobs that arrived on a different day but have an appointment landing in this range — including ones already closed today."
+          >
+            <input
+              type="checkbox"
+              checked={includeScheduledAppts}
+              onChange={(e) => setIncludeScheduledAppts(e.target.checked)}
+              className="h-3.5 w-3.5"
+            />
+            Include today&apos;s appointments
+          </label>
           <Button variant="outline" size="sm" onClick={() => void refetch()} className="h-8 text-xs">
             Refresh
           </Button>
@@ -301,6 +315,7 @@ export default function ReportsPage() {
               bucket={drillDown.bucket}
               startDate={start}
               endDate={end}
+              includeScheduledAppts={includeScheduledAppts}
             />
           </SheetContent>
         ) : null}
@@ -314,17 +329,20 @@ function DrillDownJobs({
   bucket,
   startDate,
   endDate,
+  includeScheduledAppts,
 }: {
   companyId: string;
   bucket: CompanyReportBucket | "total";
   startDate: string;
   endDate: string;
+  includeScheduledAppts: boolean;
 }) {
   const { data, isLoading, isError } = useCompanyReportJobs({
     company_id: companyId,
     bucket,
     start_date: startDate,
     end_date: endDate,
+    include_scheduled_appts: includeScheduledAppts,
   });
 
   const jobs = data?.items ?? [];
@@ -346,10 +364,23 @@ function DrillDownJobs({
       ) : (
         <ul className="space-y-3">
           {jobs.map((job) => (
-            <li key={job.job_id} className="rounded-md border p-3 text-xs">
+            <li
+              key={job.job_id}
+              className={`rounded-md border p-3 text-xs ${
+                job.matched_by === "appointment" ? "border-amber-400/60 bg-amber-50/50 dark:bg-amber-950/20" : ""
+              }`}
+            >
               <div className="flex items-center justify-between gap-2">
                 <span className="font-medium">{job.address ?? "No address"}</span>
                 <div className="flex shrink-0 gap-1">
+                  {job.matched_by === "appointment" ? (
+                    <span
+                      className="rounded bg-amber-400/20 px-1.5 py-0.5 font-mono text-[10px] uppercase text-amber-700 dark:text-amber-400"
+                      title="Arrived on a different day — pulled in because its appointment lands in this range"
+                    >
+                      Appt today
+                    </span>
+                  ) : null}
                   {bucket === "total" ? (
                     <span className="bg-muted rounded px-1.5 py-0.5 font-mono text-[10px] uppercase">
                       {BUCKET_LABEL[job.bucket]}

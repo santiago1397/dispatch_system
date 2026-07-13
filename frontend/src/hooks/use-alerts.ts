@@ -66,3 +66,17 @@ export function useResolveAlert(id: string) {
     },
   });
 }
+
+/**
+ * Mark every open alert as seen — clears the navbar badge without
+ * resolving anything. Fired once when the Alerts page is opened.
+ */
+export function useMarkAlertsSeen() {
+  const qc = useQueryClient();
+  return useMutation<{ marked: number }, ApiError, void>({
+    mutationFn: () => apiClient.post(API_ROUTES.ALERTS_MARK_SEEN),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["alerts"] });
+    },
+  });
+}

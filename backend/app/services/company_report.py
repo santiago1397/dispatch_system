@@ -36,10 +36,20 @@ async def get_company_report(
     *,
     start_date: date,
     end_date: date,
+    include_scheduled_appts: bool = False,
 ) -> CompanyReportResponse:
-    """Compute the live per-company status breakdown for ``[start_date, end_date]``."""
+    """Compute the live per-company status breakdown for ``[start_date, end_date]``.
+
+    ``include_scheduled_appts`` widens each company's job set to also pull
+    in jobs that arrived on a different day but whose appointment lands in
+    range (see ``app.repositories.job._in_range_membership``) — so a job
+    scheduled for today, however it currently stands, counts toward
+    today's report even if it was dispatched last week.
+    """
     start, end = business_range_bounds(start_date, end_date)
-    rows = await get_company_status_breakdown(db, start=start, end=end)
+    rows = await get_company_status_breakdown(
+        db, start=start, end=end, include_scheduled_appts=include_scheduled_appts
+    )
 
     counts_by_company: dict[UUID, dict[str, int]] = {}
     for company_id, bucket, count in rows:
@@ -83,17 +93,25 @@ async def get_company_report_jobs(
     end_date: date,
     company_id: UUID,
     bucket: str | None,
+    include_scheduled_appts: bool = False,
 ) -> CompanyReportJobsResponse:
     """Drill-down for one company/bucket cell — or the company's "Total"
     column when ``bucket`` is ``None`` — of ``get_company_report``.
 
     Reuses the same bucket classification the breakdown counts are built
     from (``app.repositories.job._status_bucket_case``), so this can never
-    disagree with the count an operator is trying to verify.
+    disagree with the count an operator is trying to verify. Pass the same
+    ``include_scheduled_appts`` the breakdown call used, so the job list
+    matches the count being drilled into.
     """
     start, end = business_range_bounds(start_date, end_date)
     rows = await get_company_status_jobs(
-        db, start=start, end=end, company_id=company_id, bucket=bucket
+        db,
+        start=start,
+        end=end,
+        company_id=company_id,
+        bucket=bucket,
+        include_scheduled_appts=include_scheduled_appts,
     )
 
     company_row = (

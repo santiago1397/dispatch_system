@@ -111,6 +111,15 @@ async def parse_tech_reply(
     target_dispatch_event = await _resolve_target_dispatch(db, wa_message)
 
     if target_dispatch_event is None:
+        await alert_repo.create_or_get_open(
+            db,
+            kind="tech_reply_no_target",
+            chat_jid=wa_message.chat_jid,
+            payload={
+                "wa_message_id": wa_message.wa_message_id,
+                "body_preview": (wa_message.body or "")[:120],
+            },
+        )
         logger.warning(
             "TECH_REPLY_NO_TARGET chat_jid=%s wa_message_id=%s body=%r",
             wa_message.chat_jid,
@@ -321,6 +330,15 @@ async def parse_openphone_tech_reply(
     target = await _resolve_openphone_target_dispatch(db, technician_phone_e164=phone)
 
     if target is None:
+        await alert_repo.create_or_get_open(
+            db,
+            kind="tech_reply_no_target",
+            chat_jid=f"openphone:{phone}",
+            payload={
+                "openphone_id": incoming_message.openphone_id,
+                "body_preview": (incoming_message.content or "")[:120],
+            },
+        )
         logger.warning(
             "OP_TECH_REPLY_NO_TARGET phone=%s openphone_id=%s body=%r",
             phone,
@@ -832,7 +850,7 @@ async def _extract_intent(db: AsyncSession, body: str) -> TechReplyIntent:
         f"codes.\n\nCurrent time (UTC): {now_iso}\n\n"
         "INTENTS:\n"
         "- in_progress: tech is on the way / heading over now / working it "
-        "('on way', 'tech on way', 'in progress', 'omw').\n"
+        "('on way', 'tech on way', 'in progress', 'omw', 'otw').\n"
         "- appt_set: an appointment/time was set, or the customer wants a "
         "specific time ('appt for 3pm', 'customer wants tomorrow morning').\n"
         "- needs_follow_up: the deal is still open and the operator must call "

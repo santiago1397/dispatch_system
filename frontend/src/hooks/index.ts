@@ -31,7 +31,12 @@ export {
   useDeactivateTechnician,
   TECHNICIANS_PAGE_SIZE,
 } from "./use-technicians";
-export { useAlerts, useAlert, useResolveAlert } from "./use-alerts";
+export {
+  useAlerts,
+  useAlert,
+  useResolveAlert,
+  useMarkAlertsSeen,
+} from "./use-alerts";
 export { useDailyStats, useExportStats } from "./use-stats";
 export { useCompanyReport } from "./use-company-report";
 export { useCompanyReportJobs } from "./use-company-report-jobs";

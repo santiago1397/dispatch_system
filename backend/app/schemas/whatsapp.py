@@ -4,11 +4,12 @@ Mirrors the OpenPhone schema pattern (``app/schemas/openphone.py``):
 ``Base`` shared, separate ``Create``/``Update``/``Read``/``List`` classes.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.core.timezone import BUSINESS_TZ
 from app.schemas.base import BaseSchema, TimestampSchema
 
 # =============================================================================
@@ -112,6 +113,26 @@ class WhatsappMessageCreate(BaseSchema):
     is_system_message: bool = False
     system_event_type: str | None = Field(default=None, max_length=50)
     raw_payload: dict = Field(default_factory=dict)
+
+    @field_validator("timestamp", "edited_at")
+    @classmethod
+    def _fix_extension_utc_mislabel(cls, dt: datetime | None) -> datetime | None:
+        """Reinterpret the extension's timestamp as Chicago local, not UTC.
+
+        The extension reads WhatsApp Web's displayed message time straight
+        off the DOM (e.g. "9:08 a.m." — the browser's, i.e. the Chicago
+        dispatcher's, local wall clock) and serializes it with a UTC
+        offset without ever converting it, so a message actually sent at
+        9:08 AM Chicago arrives here as ``"...T09:08:00+00:00"``. Left
+        uncorrected, this pushes send times up to 5 hours early, which is
+        enough to misfile messages sent 12am-5am Chicago into the wrong
+        business day (see ``app.core.timezone``). Strip the mislabeled
+        offset and re-localize to Chicago before converting to real UTC.
+        Remove this once the extension is fixed to convert correctly.
+        """
+        if dt is None:
+            return None
+        return dt.replace(tzinfo=BUSINESS_TZ).astimezone(UTC)
 
 
 class WhatsappMessageRead(TimestampSchema):

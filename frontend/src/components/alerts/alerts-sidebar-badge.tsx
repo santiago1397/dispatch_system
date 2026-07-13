@@ -3,19 +3,21 @@
 import { useAlerts } from "@/hooks";
 
 /**
- * Unread-count badge for the Alerts sidebar entry.
+ * Unseen-count badge for the Alerts sidebar entry.
  *
- * Shows the open-alert total as a small chip. Polls at the hook's
- * cadence (60s) — same as the full Alerts page, so the badge never
- * lags the page.
+ * Shows alerts the operator hasn't viewed yet (``unseen``), not the full
+ * unsolved total — that count lives inside the Alerts page itself.
+ * Opening the page marks the open queue seen, which drops this badge to 0
+ * even though those alerts may still be unresolved. Polls at the hook's
+ * cadence (60s) — same as the full Alerts page, so the badge never lags.
  */
 export function AlertsSidebarBadge() {
   const { data } = useAlerts();
-  const total = data?.total ?? 0;
-  if (total === 0) return null;
+  const unseen = data?.unseen ?? 0;
+  if (unseen === 0) return null;
   return (
     <span className="bg-destructive text-destructive-foreground ml-auto inline-flex min-w-5 items-center justify-center rounded-full px-1.5 text-[10px] font-medium">
-      {total > 99 ? "99+" : total}
+      {unseen > 99 ? "99+" : unseen}
     </span>
   );
 }

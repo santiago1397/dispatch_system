@@ -563,6 +563,7 @@ class TestParseOpenPhoneTechReply:
     async def test_no_target_returns_no_target(self):
         tech = _make_technician()
         incoming = _make_message()
+        alert_create = AsyncMock()
         with (
             patch(
                 "app.services.tech_reply_parser._resolve_openphone_target_dispatch",
@@ -572,6 +573,10 @@ class TestParseOpenPhoneTechReply:
                 "app.services.tech_reply_parser._extract_intent",
                 new=AsyncMock(),
             ) as extract,
+            patch(
+                "app.services.tech_reply_parser.alert_repo.create_or_get_open",
+                new=alert_create,
+            ),
         ):
             source, intent = await parse_openphone_tech_reply(
                 db=AsyncMock(), incoming_message=incoming, technician=tech
@@ -579,6 +584,10 @@ class TestParseOpenPhoneTechReply:
         assert source == "no_target"
         assert intent is None
         extract.assert_not_called()
+        alert_create.assert_awaited_once()
+        kwargs = alert_create.await_args.kwargs
+        assert kwargs["kind"] == "tech_reply_no_target"
+        assert kwargs["chat_jid"] == f"openphone:{tech.phone_e164}"
 
     @pytest.mark.anyio
     async def test_llm_failure_does_not_raise(self):

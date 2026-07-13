@@ -47,6 +47,11 @@ class CompanyReportJobRow(BaseSchema):
     dispatch_job_id: UUID | None
     bucket: str
     lifecycle_status: str
+    matched_by: str
+    """``"arrival"`` if ``first_message_at`` put this job in range, or
+    ``"appointment"`` if it only qualifies because ``appt_at`` lands in
+    range (it arrived on a different day) — set only when the caller
+    passed ``include_scheduled_appts=True``."""
     first_message_at: datetime
     appt_at: datetime | None
     address: str | None

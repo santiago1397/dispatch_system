@@ -49,7 +49,7 @@ def _is_companys_own_number(company: Company, phone_e164: str | None) -> bool:
     """True when ``phone_e164`` is one of the company's own registered numbers.
 
     Some companies stamp their own dispatch/broker callback number into every
-    job block right next to the address (e.g. ``(2037699944 #5958)``) — the
+    job block right next to the address (e.g. ``(555-0100 #5958)``) — the
     AI extractor can't distinguish that from a customer's phone, so it comes
     back as ``extraction.customer_phone``. Left as-is, that recurring number
     drives false-positive dedup matches across every unrelated job the

@@ -145,6 +145,79 @@ _PAYMENT_NOTE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A re-paste's appended note that reports the tech heading to the job
+# ("On way", "OMW", "en route", "heading over") is NOT a decline — it's
+# the opposite, progress on a job being worked. Regression: "17200 Fox
+# Grove Ln, Tinley Park" (AMS) was marked ``rejected`` off a re-paste
+# whose only added text was "On way".
+_EN_ROUTE_NOTE_RE = re.compile(
+    r"\bon\s*(?:my|the)?\s*way\b|\bomw\b|\ben\s*route\b|\bheading\s+(?:over|there|out)\b"
+    r"|\bon\s+route\b|\botw\b",
+    re.IGNORECASE,
+)
+
+# A re-paste's appended note reporting the customer wasn't there when the
+# tech arrived ("she's not there anymore", "no one home", "cx gone"), or
+# that the customer resolved the problem themselves and the job is no
+# longer needed ("cx found his key. DNS", "no longer needs us"), is a
+# CANCELLATION reason, not a plain decline — the job was accepted (and
+# possibly worked), but doesn't need to be completed. Distinguished from
+# ``REJECT_PHRASES`` (which mean "we are not taking this job at all") so
+# it can route to the ``canceled`` terminal status instead of
+# ``rejected``. See :func:`is_cancel_signal`.
+# Regression: "428 N Elmwood Ave, Waukegan" (Always 24/7) was marked
+# ``rejected`` off a re-paste whose only added note was "Cx found his
+# key. DNS" — a self-resolved cancellation, not a decline.
+_CUSTOMER_UNAVAILABLE_NOTE_RE = re.compile(
+    r"\bnot\s+there\s+anymore\b"
+    r"|\b(?:isn'?t|is\s+not|wasn'?t|was\s+not)\s+(?:there|home)\b"
+    r"|\bno\s+(?:one|body)\s+(?:home|there|answer(?:ed|ing)?)\b"
+    r"|\bnobody\s+(?:home|there)\b"
+    r"|\bno\s+answer\b"
+    r"|\b(?:customer|cx|client)\s+(?:gone|left|not\s+(?:home|there))\b"
+    r"|\balready\s+left\b"
+    r"|\bfound\s+(?:his|her|their|a)\s+key\b"
+    r"|\bdns\b"
+    r"|\bno\s+longer\s+need(?:s|ed)?\b"
+    r"|\b(?:cx|customer|client)\s+(?:resolved|handled|fixed)\s+it\b"
+    r"|\bcancel(?:l?ed)?\s+on\s+(?:his|her|their)\s+own\b",
+    re.IGNORECASE,
+)
+
+# A re-paste's appended note reporting a deposit taken and/or a future
+# close date ("took 50 deposit will close job Tuesday Wednesday") is NOT
+# a decline — it's the tech confirming the job is scheduled/accepted and
+# reporting progress toward closing it, the opposite of passing on it.
+# Distinct from ``_PAYMENT_NOTE_RE`` (a completed settlement report, which
+# is also handled by ``closing_signal.py``'s dedicated gate): here no
+# final total has landed yet, just a deposit and a future close date, so
+# it reads closest to an appointment/scheduling update.
+# Regression: "2885 Foxwood Dr, New Lenox" (Always 24/7) was marked
+# ``rejected`` off a re-paste whose only added note was "took 50 deposit
+# will close job Tusday Wednesday" — an in-progress scheduling update.
+_DEPOSIT_NOTE_RE = re.compile(
+    r"\bdeposit\b"
+    r"|\bwill\s+close\b"
+    r"|\bclose\s+(?:the\s+)?job\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_en_route_note(body: str) -> bool:
+    """True if ``body`` reads as the tech heading to the job, not a decline."""
+    return bool(_EN_ROUTE_NOTE_RE.search(body))
+
+
+def _looks_like_customer_unavailable_note(body: str) -> bool:
+    """True if ``body`` reports the customer wasn't there — a cancel reason."""
+    return bool(_CUSTOMER_UNAVAILABLE_NOTE_RE.search(body))
+
+
+def _looks_like_deposit_note(body: str) -> bool:
+    """True if ``body`` reports a deposit taken / future close date rather
+    than a job decline (see :data:`_DEPOSIT_NOTE_RE`)."""
+    return bool(_DEPOSIT_NOTE_RE.search(body))
+
 
 def _looks_like_data_question(body: str) -> bool:
     """True if ``body`` reads as a question / data-correction request
@@ -234,11 +307,18 @@ def is_repaste_with_note(body: str, job_body: str) -> bool:
 
     Either path is vetoed when the note itself reads as a question or a
     data-correction request (see :func:`_looks_like_data_question`), as an
-    appointment confirmation (see :func:`_looks_like_appt_note`), or as a
-    payment/settlement report (see :func:`_looks_like_payment_note`) rather
-    than an actual decline — an operator flagging "wrong number, pls
-    check", reporting "Appt tomorrow 10:30 am", or a tech closing out with
-    "Total: 174$ cc" back to the source chat is not passing on the job.
+    appointment confirmation (see :func:`_looks_like_appt_note`), as a
+    payment/settlement report (see :func:`_looks_like_payment_note`), as
+    the tech heading to the job (see :func:`_looks_like_en_route_note`), or
+    as a deposit-taken / future-close-date update (see
+    :func:`_looks_like_deposit_note`) rather than an actual decline — an
+    operator flagging "wrong number, pls check", reporting "Appt tomorrow
+    10:30 am", a tech closing out with "Total: 174$ cc", "On way", or
+    "took 50 deposit will close job Tuesday Wednesday" back to the source
+    chat is not passing on the job. A note matching
+    :func:`_looks_like_customer_unavailable_note` is also excluded here —
+    it is not a plain decline either, but is routed to the ``canceled``
+    status via :func:`is_cancel_signal` instead of merely being vetoed.
     """
     job_norm = _normalize(job_body)
     reply_norm = _normalize(body)
@@ -254,6 +334,9 @@ def is_repaste_with_note(body: str, job_body: str) -> bool:
             _looks_like_data_question(body)
             or _looks_like_appt_note(body)
             or _looks_like_payment_note(body)
+            or _looks_like_en_route_note(body)
+            or _looks_like_customer_unavailable_note(body)
+            or _looks_like_deposit_note(body)
         )
 
     if job_norm in reply_norm:
@@ -281,6 +364,48 @@ def is_reject_signal(body: str, job_body: str | None = None) -> bool:
     if is_reject_phrase(body):
         return True
     return bool(job_body and is_repaste_with_note(body, job_body))
+
+
+def is_repaste_with_cancel_note(body: str, job_body: str) -> bool:
+    """True if ``body`` is a re-paste of ``job_body`` plus a note reporting
+    the customer wasn't there (see :data:`_CUSTOMER_UNAVAILABLE_NOTE_RE`).
+
+    Same containment/similarity structure as :func:`is_repaste_with_note`,
+    but requires the note to positively match the customer-unavailable
+    wording rather than merely fail the decline vetoes — a bare re-paste
+    with an unrelated short note is not a cancel signal.
+    """
+    job_norm = _normalize(job_body)
+    reply_norm = _normalize(body)
+    if len(job_norm) < _REPASTE_MIN_JOB_CHARS or not reply_norm:
+        return False
+    if reply_norm == job_norm:
+        return False
+    if not _looks_like_customer_unavailable_note(body):
+        return False
+
+    if job_norm in reply_norm:
+        extra = len(reply_norm) - len(job_norm)
+        return 0 < extra <= _REPASTE_NOTE_MAX_CHARS
+
+    if len(reply_norm) >= len(job_norm):
+        ratio = SequenceMatcher(None, job_norm, reply_norm).ratio()
+        return ratio >= _REPASTE_SIMILARITY_THRESHOLD
+    return False
+
+
+def is_cancel_signal(body: str, job_body: str | None = None) -> bool:
+    """True if the operator reply ``body`` reports the job needs to be
+    canceled (tech got there, but the customer wasn't there) rather than
+    declined outright.
+
+    Checked by callers *before* :func:`is_reject_signal` so a message that
+    matches both (unlikely, given the disjoint wording) reads as a cancel,
+    which carries more information for the operator than a bare reject.
+    """
+    if not body or not body.strip():
+        return False
+    return bool(job_body and is_repaste_with_cancel_note(body, job_body))
 
 
 # =============================================================================

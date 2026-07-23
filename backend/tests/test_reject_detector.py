@@ -165,6 +165,99 @@ def test_repaste_with_appt_note_is_not_reject(note: str) -> None:
     assert reject_detector.is_reject_signal(reply, JOB_BODY) is False
 
 
+@pytest.mark.parametrize(
+    "note",
+    [
+        "On way",
+        "on my way",
+        "OMW",
+        "en route",
+        "heading over",
+        "heading there",
+    ],
+)
+def test_repaste_with_en_route_note_is_not_reject(note: str) -> None:
+    # Regression: "17200 Fox Grove Ln, Tinley Park" (AMS) was marked
+    # `rejected` off a re-paste whose only added text was "On way" — the
+    # tech heading to the job, the opposite of a decline.
+    reply = JOB_BODY + "\n" + note
+    assert reject_detector.is_repaste_with_note(reply, JOB_BODY) is False
+    assert reject_detector.is_reject_signal(reply, JOB_BODY) is False
+    assert reject_detector.is_cancel_signal(reply, JOB_BODY) is False
+
+
+@pytest.mark.parametrize(
+    "note",
+    [
+        "she's not there anymore",
+        "not there anymore",
+        "no one home",
+        "nobody home",
+        "no answer",
+        "customer not home",
+        "cx gone",
+        "already left",
+    ],
+)
+def test_repaste_with_customer_unavailable_note_is_cancel_not_reject(note: str) -> None:
+    # Regression: "1515 W Touhy Ave, Park Ridge" (AMS) was marked
+    # `rejected` when the tech got on site and the customer had left — that
+    # is a cancellation reason, not a decline (the job was accepted and
+    # worked).
+    reply = JOB_BODY + "\n" + note
+    assert reject_detector.is_repaste_with_note(reply, JOB_BODY) is False
+    assert reject_detector.is_reject_signal(reply, JOB_BODY) is False
+    assert reject_detector.is_repaste_with_cancel_note(reply, JOB_BODY) is True
+    assert reject_detector.is_cancel_signal(reply, JOB_BODY) is True
+
+
+def test_bare_repaste_without_cancel_note_is_not_cancel() -> None:
+    assert reject_detector.is_cancel_signal(JOB_BODY, JOB_BODY) is False
+    assert reject_detector.is_cancel_signal("", JOB_BODY) is False
+    assert reject_detector.is_cancel_signal("she's not there anymore", None) is False
+
+
+@pytest.mark.parametrize(
+    "note",
+    [
+        "Cx found his key. DNS",
+        "customer found her key",
+        "cx resolved it",
+        "customer no longer needs us",
+        "canceled on his own",
+    ],
+)
+def test_repaste_with_self_resolved_note_is_cancel_not_reject(note: str) -> None:
+    # Regression: "428 N Elmwood Ave, Waukegan" (Always 24/7) was marked
+    # `rejected` off a re-paste whose only added text was "Cx found his
+    # key. DNS" — the customer resolved the issue themselves, a
+    # cancellation reason, not a decline.
+    reply = JOB_BODY + "\n" + note
+    assert reject_detector.is_repaste_with_note(reply, JOB_BODY) is False
+    assert reject_detector.is_reject_signal(reply, JOB_BODY) is False
+    assert reject_detector.is_repaste_with_cancel_note(reply, JOB_BODY) is True
+    assert reject_detector.is_cancel_signal(reply, JOB_BODY) is True
+
+
+@pytest.mark.parametrize(
+    "note",
+    [
+        "took 50 deposit will close job Tusday Wednesday",
+        "took a deposit, will close later",
+        "close the job tomorrow",
+    ],
+)
+def test_repaste_with_deposit_note_is_not_reject(note: str) -> None:
+    # Regression: "2885 Foxwood Dr, New Lenox" (Always 24/7) was marked
+    # `rejected` off a re-paste whose only added text was "took 50 deposit
+    # will close job Tusday Wednesday" — the tech reporting a deposit and
+    # a future close date, the opposite of a decline.
+    reply = JOB_BODY + "\n" + note
+    assert reject_detector.is_repaste_with_note(reply, JOB_BODY) is False
+    assert reject_detector.is_reject_signal(reply, JOB_BODY) is False
+    assert reject_detector.is_cancel_signal(reply, JOB_BODY) is False
+
+
 # ---------------------------------------------------------------------------
 # Orchestration: WhatsappService._maybe_reject_job
 # ---------------------------------------------------------------------------
@@ -266,6 +359,35 @@ async def test_maybe_reject_not_a_reject_message() -> None:
     ls_cls.return_value.transition.assert_not_awaited()
 
 
+@pytest.mark.anyio
+async def test_maybe_reject_routes_customer_unavailable_to_canceled() -> None:
+    now = datetime.now(UTC)
+    job = SimpleNamespace(id=uuid4(), first_message_at=now - timedelta(minutes=2))
+    svc = WhatsappService(db=AsyncMock())
+    reply = JOB_BODY + "\nshe's not there anymore"
+
+    with (
+        patch(
+            "app.repositories.job.find_reject_candidate",
+            new=AsyncMock(return_value=(job, JOB_BODY)),
+        ),
+        patch(
+            "app.services.whatsapp.whatsapp_repo.count_operator_messages_between",
+            new=AsyncMock(return_value=1),
+        ),
+        patch("app.services.lifecycle.LifecycleService") as ls_cls,
+    ):
+        ls_cls.return_value.transition = AsyncMock(return_value=uuid4())
+        result = await svc._maybe_reject_job(_msg(reply, ts=now), batch_id="b1")
+
+    assert result is True
+    kwargs = ls_cls.return_value.transition.await_args.kwargs
+    assert kwargs["to_status"] == LifecycleStatus.CANCELED
+    assert kwargs["source"] == LifecycleEventSource.OPERATOR_CANCEL
+    assert kwargs["job"] is job
+    assert kwargs["payload"]["note"]
+
+
 # ---------------------------------------------------------------------------
 # Orchestration: OpenPhoneService.maybe_reject_job (Quo path)
 # ---------------------------------------------------------------------------
@@ -350,6 +472,60 @@ async def test_openphone_reject_not_a_reject_message() -> None:
 
     assert result is False
     ls_cls.return_value.transition.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_openphone_reject_not_triggered_by_en_route_repaste() -> None:
+    # Regression: "On way" appended to a re-pasted job body was wrongly
+    # read as an operator decline.
+    now = datetime.now(UTC)
+    job = SimpleNamespace(id=uuid4(), first_message_at=now - timedelta(minutes=1))
+    svc = OpenPhoneService(db=AsyncMock())
+    reply = JOB_BODY + "\nOn way"
+
+    with (
+        patch(
+            "app.repositories.job.find_reject_candidate_openphone",
+            new=AsyncMock(return_value=(job, JOB_BODY)),
+        ),
+        patch("app.services.lifecycle.LifecycleService") as ls_cls,
+    ):
+        ls_cls.return_value.transition = AsyncMock()
+        result = await svc.maybe_reject_job(_op_msg(reply, ts=now))
+
+    assert result is False
+    ls_cls.return_value.transition.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_openphone_reject_routes_customer_unavailable_to_canceled() -> None:
+    # Regression: "1515 W Touhy Ave, Park Ridge" (AMS) job was marked
+    # `rejected` when the operator relayed "Tech got on site cx resolve is
+    # not there anymore" — that should cancel the job, not reject it.
+    now = datetime.now(UTC)
+    job = SimpleNamespace(id=uuid4(), first_message_at=now - timedelta(minutes=1))
+    svc = OpenPhoneService(db=AsyncMock())
+    reply = JOB_BODY + "\nTech got on site cx not there anymore"
+
+    with (
+        patch(
+            "app.repositories.job.find_reject_candidate_openphone",
+            new=AsyncMock(return_value=(job, JOB_BODY)),
+        ),
+        patch(
+            "app.services.openphone.openphone_repo.count_outbound_messages_to",
+            new=AsyncMock(return_value=1),
+        ),
+        patch("app.services.lifecycle.LifecycleService") as ls_cls,
+    ):
+        ls_cls.return_value.transition = AsyncMock(return_value=uuid4())
+        result = await svc.maybe_reject_job(_op_msg(reply, ts=now))
+
+    assert result is True
+    kwargs = ls_cls.return_value.transition.await_args.kwargs
+    assert kwargs["to_status"] == LifecycleStatus.CANCELED
+    assert kwargs["source"] == LifecycleEventSource.OPERATOR_CANCEL
+    assert kwargs["job"] is job
 
 
 # ---------------------------------------------------------------------------

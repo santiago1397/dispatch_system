@@ -23,6 +23,7 @@ from app.services.classification import (
     PHONE_PATTERN,
     JobClassificationService,
 )
+from app.services.lifecycle import LifecycleStatus
 from app.services.user import UserService
 
 
@@ -452,6 +453,75 @@ class TestJobClassificationDedup:
         assert update_kwargs["classification_method"] == "dedup"
         assert update_kwargs["job_id"] == existing_job.id
         assert update_kwargs["company_id"] == company.id
+
+    @pytest.mark.anyio
+    async def test_classify_message_dedup_same_company_appt_update(
+        self, monkeypatch, mock_db_session
+    ):
+        """A re-paste that links to an existing (pending) Job and carries a
+        scheduled_at must still drive the appt_set lifecycle transition —
+        not just the brand-new-Job path. Regression: a same-day appointment
+        note on a job already in the system ("Cx had situation appt moved
+        3:20") left the Job stuck at ``pending`` forever because only Job
+        creation applied the transition."""
+        company = _make_company(
+            identification_patterns=[{"patterns": [r"lockout", r"\d{3}-\d{3}-\d{4}"]}],
+        )
+        existing_job = MagicMock(spec=Job)
+        existing_job.id = uuid4()
+        existing_job.company_id = company.id
+        existing_job.address_street_number = "123"
+        existing_job.address_street_name = "north main street"
+        existing_job.job_type = "House Lockout"
+        existing_job.first_message_at = MagicMock()
+        existing_job.lifecycle_status = "pending"
+
+        message = _make_message(
+            content="Lockout at 123 N Main St, Chicago, IL 60601. 773-555-1212. Appt moved 3:20"
+        )
+        pending_dj = MagicMock()
+        pending_dj.id = uuid4()
+
+        structured = MagicMock()
+        structured.ainvoke = AsyncMock(
+            return_value=JobExtraction(
+                address="123 N Main St, Chicago, IL 60601",
+                job_type="House Lockout",
+                scheduled_at="2026-07-24T15:20:00",
+            )
+        )
+        instance = MagicMock()
+        instance.with_structured_output.return_value = structured
+        monkeypatch.setattr(
+            "app.services.classification.ChatOpenAI", MagicMock(return_value=instance)
+        )
+
+        with (
+            patch("app.services.classification.company_repo") as mock_company_repo,
+            patch("app.services.classification.job_repo") as mock_job_repo,
+            patch("app.services.classification.dispatch_job_repo") as mock_dj_repo,
+            patch("app.services.classification.phone_binding_repo") as mock_binding_repo,
+            patch("app.services.classification.LifecycleService") as mock_lifecycle_cls,
+        ):
+            mock_company_repo.get_by_phone_number = AsyncMock(return_value=None)
+            mock_company_repo.get_all_active = AsyncMock(return_value=[company])
+            mock_binding_repo.get_company_by_phone = AsyncMock(return_value=None)
+            mock_dj_repo.get_by_message_id = AsyncMock(return_value=None)
+            mock_dj_repo.create_dispatch_job = AsyncMock(return_value=pending_dj)
+            mock_dj_repo.update_dispatch_job = AsyncMock(return_value=pending_dj)
+            mock_job_repo.find_dedup_candidate = AsyncMock(return_value=(existing_job, False))
+            mock_job_repo.create_job = AsyncMock()
+            mock_lifecycle_instance = mock_lifecycle_cls.return_value
+            mock_lifecycle_instance.transition = AsyncMock(return_value=uuid4())
+
+            svc = JobClassificationService(mock_db_session)
+            await svc.classify_message(message)
+
+        mock_lifecycle_instance.transition.assert_awaited_once()
+        transition_kwargs = mock_lifecycle_instance.transition.await_args.kwargs
+        assert transition_kwargs["job"] is existing_job
+        assert transition_kwargs["to_status"] == LifecycleStatus.APPT_SET
+        assert transition_kwargs["payload"]["appt_iso"] == "2026-07-24T15:20:00"
 
     @pytest.mark.anyio
     async def test_classify_message_dedup_cross_company(self, monkeypatch, mock_db_session):

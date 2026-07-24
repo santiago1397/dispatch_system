@@ -31,6 +31,7 @@ from langchain_openai import ChatOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.timezone import BUSINESS_TZ
 from app.db.models.company import Company
 from app.db.models.dispatch_job import ClassificationStatus, DispatchJob
 from app.db.models.job_lifecycle_event import LifecycleEventSource
@@ -63,6 +64,7 @@ def _is_companys_own_number(company: Company, phone_e164: str | None) -> bool:
         if stored_digits[-10:] == phone_e164[-10:]:
             return True
     return False
+
 
 # === Job Detection Patterns ===
 
@@ -328,8 +330,9 @@ class JobClassificationService:
             )
 
         # 6. Extract fields via AI.
+        message_at = _message_timestamp(message)
         try:
-            extraction = await self._extract_fields(match_content, company)
+            extraction = await self._extract_fields(match_content, company, at=message_at)
         except Exception as e:
             logger.exception("Field extraction failed")
             logger.info(
@@ -383,8 +386,28 @@ class JobClassificationService:
             candidate.id if candidate is not None else None,
         )
 
-        # 8a. Same-company dedup hit — append-only, link to existing Job.
+        # 8a. Same-company dedup hit — append-only, link to existing Job. A
+        # re-paste of the job that only updates the appointment time (e.g.
+        # "Cx had situation appt moved 3:20") must drive the same
+        # lifecycle transition 8b/c applies on first classification —
+        # otherwise the Job silently sits at its old status forever despite
+        # a fresh scheduled_at arriving on a later linked message. Skipped
+        # once the Job has reached a terminal state; a stray re-paste after
+        # close/cancel/reject shouldn't reopen it.
         if candidate is not None and not is_cross_company:
+            appt_dt = parse_iso8601(extraction.scheduled_at)
+            if appt_dt is not None and candidate.lifecycle_status not in (
+                LifecycleStatus.CLOSED.value,
+                LifecycleStatus.CANCELED.value,
+                LifecycleStatus.REJECTED.value,
+            ):
+                await LifecycleService(self.db).transition(
+                    job=candidate,
+                    to_status=LifecycleStatus.APPT_SET,
+                    source=LifecycleEventSource.CLASSIFICATION,
+                    payload={"appt_iso": extraction.scheduled_at},
+                    at=message_at or datetime.now(UTC),
+                )
             return await self._save_extraction(
                 job=job,
                 company=company,
@@ -410,7 +433,7 @@ class JobClassificationService:
         new_job = await job_repo.create_job(
             self.db,
             company_id=company.id,
-            first_message_at=_message_timestamp(message) or datetime.now(UTC),
+            first_message_at=message_at or datetime.now(UTC),
             address_street_number=normalized.street_number,
             address_street_name=normalized.street_name,
             address_city=normalized.city,
@@ -436,7 +459,7 @@ class JobClassificationService:
                 to_status=LifecycleStatus.APPT_SET,
                 source=LifecycleEventSource.CLASSIFICATION,
                 payload={"appt_iso": extraction.scheduled_at},
-                at=_message_timestamp(message) or datetime.now(UTC),
+                at=message_at or datetime.now(UTC),
             )
 
         return await self._save_extraction(
@@ -585,8 +608,17 @@ class JobClassificationService:
         )
         return job
 
-    async def _extract_fields(self, content: str, company: Company) -> JobExtraction:
-        """Use AI to extract 13 fields from the message."""
+    async def _extract_fields(
+        self, content: str, company: Company, *, at: datetime | None = None
+    ) -> JobExtraction:
+        """Use AI to extract 13 fields from the message.
+
+        ``at`` is the message's real send time (see ``_message_timestamp``),
+        used only as the "today" reference for resolving bare, date-less
+        appointment times like "Appt 12" or "appt moved 3:20" — a re-paste
+        note updating an existing job rarely restates the date. Falls back
+        to processing time when unknown.
+        """
         llm_config = await AppSettingsService(self.db).get_llm_config()
         llm = ChatOpenAI(
             model=settings.AI_MODEL,
@@ -596,10 +628,13 @@ class JobClassificationService:
         )
         structured_llm = llm.with_structured_output(JobExtraction)
 
+        reference_date = (at or datetime.now(UTC)).astimezone(BUSINESS_TZ).strftime("%Y-%m-%d")
+
         prompt = (
             "You are a dispatch data extractor. Extract structured information from this "
             "job dispatch message.\n\n"
             f"Company: {company.display_name or company.name}\n"
+            f"Message date (Chicago time): {reference_date}\n"
             f"Message:\n{content[:3000]}\n\n"
             "Extract the following fields if present:\n"
             "- address: The service address\n"
@@ -616,11 +651,17 @@ class JobClassificationService:
             "- customer_phone: Phone number of the customer (not the dispatcher)\n"
             "- scheduled_at: The appointment/arrival date+time, if mentioned. Messages "
             "often state the date and time window as separate fields (e.g. "
-            "\"Date: 7/10/2026\" and \"Hours: 12:00 PM to 2:00 PM\") — combine them into "
+            '"Date: 7/10/2026" and "Hours: 12:00 PM to 2:00 PM") — combine them into '
             "a single ISO-8601 datetime using the START of the time window and the exact "
             "year given in the message (never assume the current year). "
-            "Example: \"Date: 7/10/2026\" + \"Hours: 12:00 PM to 2:00 PM\" -> "
-            "\"2026-07-10T12:00:00\". If no date/time is mentioned, set to null.\n"
+            'Example: "Date: 7/10/2026" + "Hours: 12:00 PM to 2:00 PM" -> '
+            '"2026-07-10T12:00:00". If the message gives only a bare time with no '
+            'explicit date — e.g. "Appt 12", "appt moved 3:20", "cx wants 3:20" — '
+            "treat it as a SAME-DAY appointment on the Message date above and combine "
+            "that date with the given time. Example: Message date 2026-07-24 + "
+            '"appt moved 3:20" -> "2026-07-24T15:20:00" (assume PM for bare hours '
+            "1-7 without am/pm, since dispatch business hours run daytime/evening). "
+            "If no date/time is mentioned at all, set to null.\n"
             "- job_description: Free-text description of what the job involves\n\n"
             "Only extract values that are clearly present in the message. "
             "Set to null if not found."

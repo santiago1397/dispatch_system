@@ -14,6 +14,7 @@ export {
   useRematchClosing,
   useJobLifecycle,
   useSetLifecycleStatus,
+  useSetJobCompany,
   JOBS_PAGE_SIZE,
 } from "./use-dispatch-jobs";
 export { useCompanies } from "./use-companies";

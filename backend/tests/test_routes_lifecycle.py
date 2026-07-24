@@ -53,11 +53,20 @@ class TestLifecyclePatch:
         db.commit = AsyncMock()
         db.refresh = AsyncMock()
 
+        dispatch_job = MagicMock()
+        dispatch_job.id = uuid4()
+        dispatch_job.job_id = uuid4()
         job = MagicMock()
-        job.id = uuid4()
-        with patch(
-            "app.repositories.job.get_job_by_id",
-            new=AsyncMock(return_value=job),
+        job.id = dispatch_job.job_id
+        with (
+            patch(
+                "app.services.dispatch_job.DispatchJobService.get_job",
+                new=AsyncMock(return_value=dispatch_job),
+            ),
+            patch(
+                "app.repositories.job.get_job_by_id",
+                new=AsyncMock(return_value=job),
+            ),
         ):
             from app.core.exceptions import InvalidTransitionError
 
@@ -74,7 +83,7 @@ class TestLifecyclePatch:
                 pytest.raises(InvalidTransitionError),
             ):
                 await set_lifecycle_status(
-                    job_id=job.id,
+                    job_id=dispatch_job.id,
                     body_in=SimpleNamespace(to_status="closed", note="n/a"),
                     db=db,
                     user=_user_with_role(),
@@ -89,11 +98,20 @@ class TestLifecyclePatch:
         db.commit = AsyncMock()
         db.refresh = AsyncMock()
 
+        dispatch_job = MagicMock()
+        dispatch_job.id = uuid4()
+        dispatch_job.job_id = uuid4()
         job = MagicMock()
-        job.id = uuid4()
-        with patch(
-            "app.repositories.job.get_job_by_id",
-            new=AsyncMock(return_value=job),
+        job.id = dispatch_job.job_id
+        with (
+            patch(
+                "app.services.dispatch_job.DispatchJobService.get_job",
+                new=AsyncMock(return_value=dispatch_job),
+            ),
+            patch(
+                "app.repositories.job.get_job_by_id",
+                new=AsyncMock(return_value=job),
+            ),
         ):
             from app.core.exceptions import ValidationError
 
@@ -110,7 +128,7 @@ class TestLifecyclePatch:
                 pytest.raises(ValidationError),
             ):
                 await set_lifecycle_status(
-                    job_id=job.id,
+                    job_id=dispatch_job.id,
                     body_in=SimpleNamespace(to_status="canceled", note=None),
                     db=db,
                     user=_user_with_role(),
@@ -122,7 +140,14 @@ class TestLifecyclePatch:
         from app.core.exceptions import NotFoundError
 
         db = AsyncMock()
+        dispatch_job = MagicMock()
+        dispatch_job.id = uuid4()
+        dispatch_job.job_id = uuid4()
         with (
+            patch(
+                "app.services.dispatch_job.DispatchJobService.get_job",
+                new=AsyncMock(return_value=dispatch_job),
+            ),
             patch(
                 "app.repositories.job.get_job_by_id",
                 new=AsyncMock(return_value=None),
@@ -130,7 +155,7 @@ class TestLifecyclePatch:
             pytest.raises(NotFoundError),
         ):
             await set_lifecycle_status(
-                job_id=uuid4(),
+                job_id=dispatch_job.id,
                 body_in=SimpleNamespace(to_status="needs_follow_up", note=None),
                 db=db,
                 user=_user_with_role(),

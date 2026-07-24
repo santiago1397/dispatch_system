@@ -36,26 +36,40 @@ async def create_or_get_open(
     detected_at = detected_at or datetime.now(UTC)
 
     if job_id is not None:
-        existing_query = select(Alert).where(
-            and_(
-                Alert.kind == kind,
-                Alert.job_id == job_id,
-                Alert.resolved_at.is_(None),
+        existing_query = (
+            select(Alert)
+            .where(
+                and_(
+                    Alert.kind == kind,
+                    Alert.job_id == job_id,
+                    Alert.resolved_at.is_(None),
+                )
             )
+            .order_by(Alert.detected_at.asc())
         )
     elif chat_jid is not None:
-        existing_query = select(Alert).where(
-            and_(
-                Alert.kind == kind,
-                Alert.chat_jid == chat_jid,
-                Alert.resolved_at.is_(None),
+        existing_query = (
+            select(Alert)
+            .where(
+                and_(
+                    Alert.kind == kind,
+                    Alert.chat_jid == chat_jid,
+                    Alert.resolved_at.is_(None),
+                )
             )
+            .order_by(Alert.detected_at.asc())
         )
     else:
         existing_query = None
 
     if existing_query is not None:
-        existing = (await db.execute(existing_query)).scalar_one_or_none()
+        # ``.first()`` rather than ``scalar_one_or_none()``: this dedup is
+        # app-level (check-then-insert), not backed by a DB unique
+        # constraint, so a race between two concurrent scan passes can
+        # leave more than one open row for the same (kind, job_id/chat_jid).
+        # Tolerate that here rather than raising ``MultipleResultsFound``
+        # and taking down the whole alert engine.
+        existing = (await db.execute(existing_query)).scalars().first()
         if existing is not None:
             return existing
 

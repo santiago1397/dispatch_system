@@ -6,11 +6,15 @@ from uuid import UUID
 from fastapi import APIRouter, Query
 
 from app.api.deps import CurrentUser, DBSession
+from app.core.exceptions import NotFoundError, ValidationError
 from app.db.models.job_lifecycle_event import LifecycleEventSource
+from app.repositories import company as company_repo
 from app.repositories import company_update_repo
 from app.repositories import job as job_repo
+from app.repositories import job_lifecycle_event as lifecycle_event_repo
 from app.schemas.dispatch_job import CompanyUpdateRead, DispatchJobList, DispatchJobRead
 from app.schemas.job_lifecycle_event import (
+    CompanyReassignIn,
     JobLifecycleEventList,
     JobLifecycleEventRead,
     LifecycleTransitionIn,
@@ -170,19 +174,27 @@ async def set_lifecycle_status(
 ):
     """Manually transition a Job to a new lifecycle status.
 
+    ``job_id`` is a ``DispatchJob`` id (consistent with every other route
+    on this router). Lifecycle status lives on the parent ``Job``, so this
+    resolves ``DispatchJob.job_id`` first.
+
     Every transition flows through ``LifecycleService.transition`` so the
     audit log + outbound draft are written in the same transaction. The
     state-machine guard rejects ``to_status='closed'`` (closing must come
     through ``CLOSING_CHAT_JID``) and requires a non-empty ``note`` when
     manually canceling.
     """
-    job = await job_repo.get_job_by_id(db, job_id)
-    if job is None:
-        from app.core.exceptions import NotFoundError
-
-        raise NotFoundError(
-            message="Dispatch job not found",
+    dispatch_job = await DispatchJobService(db).get_job(job_id)
+    if dispatch_job.job_id is None:
+        raise ValidationError(
+            message="Dispatch job has no linked Job to transition",
             details={"job_id": str(job_id)},
+        )
+    job = await job_repo.get_job_by_id(db, dispatch_job.job_id)
+    if job is None:
+        raise NotFoundError(
+            message="Job not found",
+            details={"job_id": str(dispatch_job.job_id)},
         )
 
     payload = {"note": body_in.note} if body_in.note else {}
@@ -197,7 +209,7 @@ async def set_lifecycle_status(
     await db.commit()
     await db.refresh(job)
     # Reload with company + incoming_message eager-loaded so _job_to_read works.
-    fresh = await DispatchJobService(db).get_job(job.id)
+    fresh = await DispatchJobService(db).get_job(dispatch_job.id)
     return _job_to_read(fresh)
 
 
@@ -215,14 +227,92 @@ async def get_job_lifecycle(
 ):
     """List the append-only lifecycle events for a job, newest-first.
 
-    Powers the ``<LifecycleTimeline>`` component on ``/jobs/[id]``.
+    Powers the ``<LifecycleTimeline>`` component on ``/jobs/[id]``. ``job_id``
+    is a ``DispatchJob`` id — events are stored against the parent ``Job``,
+    so this resolves ``DispatchJob.job_id`` first.
     """
-    from app.repositories import job_lifecycle_event as lifecycle_repo
+    dispatch_job = await DispatchJobService(db).get_job(job_id)
+    if dispatch_job.job_id is None:
+        return JobLifecycleEventList(items=[], total=0)
 
-    events, total = await lifecycle_repo.list_for_job_paginated(
-        db, job_id, limit=limit, offset=offset
+    events, total = await lifecycle_event_repo.list_for_job_paginated(
+        db, dispatch_job.job_id, limit=limit, offset=offset
     )
     return JobLifecycleEventList(
         items=[JobLifecycleEventRead.model_validate(e) for e in events],
         total=total,
     )
+
+
+@router.patch(
+    "/jobs/{job_id}/company",
+    response_model=DispatchJobRead,
+    summary="Manually reassign or detach a Job's company",
+    responses={
+        404: {"description": "Job or target company not found"},
+        422: {"description": "Dispatch job has no linked Job, or note missing"},
+    },
+)
+async def set_job_company(
+    job_id: UUID,
+    body_in: CompanyReassignIn,
+    db: DBSession,
+    user: CurrentUser,
+):
+    """Manually correct a Job's company attribution.
+
+    ``job_id`` is a ``DispatchJob`` id (consistent with the rest of this
+    router); company lives on the parent ``Job``. Pass ``company_id: null``
+    to detach the job from any company entirely — it stays in the
+    database (audit trail intact) but drops out of every company's
+    report, since ``get_company_status_breakdown`` only counts jobs with
+    a non-null ``company_id``. Use this for misclassifications (e.g. a
+    message regex-matched to the wrong company via a shared broker phone
+    number) rather than the lifecycle "Rejected"/"Canceled" statuses,
+    which still count toward the (wrong) company's report.
+
+    Every change is appended to the same ``job_lifecycle_events`` audit
+    log used by manual lifecycle overrides, tagged with
+    ``payload.action == "company_reassign"``, so it shows up in the
+    timeline even though ``lifecycle_status`` itself doesn't change.
+    """
+    dispatch_job = await DispatchJobService(db).get_job(job_id)
+    if dispatch_job.job_id is None:
+        raise ValidationError(
+            message="Dispatch job has no linked Job to reassign",
+            details={"job_id": str(job_id)},
+        )
+    job = await job_repo.get_job_by_id(db, dispatch_job.job_id)
+    if job is None:
+        raise NotFoundError(
+            message="Job not found",
+            details={"job_id": str(dispatch_job.job_id)},
+        )
+
+    if body_in.company_id is not None:
+        company = await company_repo.get_by_id(db, body_in.company_id)
+        if company is None:
+            raise NotFoundError(
+                message="Company not found",
+                details={"company_id": str(body_in.company_id)},
+            )
+
+    previous_company_id = job.company_id
+    await job_repo.set_company(db, job=job, company_id=body_in.company_id)
+    await lifecycle_event_repo.create_event(
+        db,
+        job_id=job.id,
+        source=LifecycleEventSource.MANUAL,
+        from_status=job.lifecycle_status,
+        to_status=job.lifecycle_status,
+        payload={
+            "action": "company_reassign",
+            "previous_company_id": str(previous_company_id) if previous_company_id else None,
+            "new_company_id": str(body_in.company_id) if body_in.company_id else None,
+            "note": body_in.note,
+        },
+        created_by_user_id=user.id,
+    )
+    await db.commit()
+    fresh = await DispatchJobService(db).get_job(dispatch_job.id)
+    return _job_to_read(fresh)

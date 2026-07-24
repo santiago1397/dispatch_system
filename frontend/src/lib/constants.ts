@@ -56,6 +56,10 @@ export const API_ROUTES = {
   // never places customer messages — see memory/feedback_no_outbound_automation.md.
   JOBS_LIFECYCLE: (id: string) => `/dispatch/jobs/${id}/lifecycle`,
 
+  // Manual company reassignment/detach — corrects misclassifications that
+  // inflate the wrong company's report (e.g. shared broker phone number).
+  JOBS_COMPANY: (id: string) => `/dispatch/jobs/${id}/company`,
+
   // Technicians — admin CRUD.
   TECHNICIANS: "/technicians",
   TECHNICIAN: (id: string) => `/technicians/${id}`,

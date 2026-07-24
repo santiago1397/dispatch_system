@@ -7,3 +7,4 @@ export { MethodBadge } from "./method-badge";
 export { LifecycleStatusBadge } from "./lifecycle-status-badge";
 export { LifecycleDropdown } from "./lifecycle-dropdown";
 export { LifecycleTimeline } from "./lifecycle-timeline";
+export { CompanyReassignControl } from "./company-reassign-control";

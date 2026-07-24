@@ -124,14 +124,31 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if settings.SCHEDULER_ENABLED and settings.ENVIRONMENT != "test":
         try:
             from apscheduler.schedulers.asyncio import AsyncIOScheduler
+            from sqlalchemy import text
 
             from app.db.session import async_session_maker
             from app.services.alerts import AlertEngine
 
             scheduler = AsyncIOScheduler()
 
+            # The prod deploy runs --workers 4, each starting its own
+            # in-process APScheduler with no leader election — all 4 fire
+            # every cron tick simultaneously. ``pg_try_advisory_xact_lock``
+            # makes only one worker actually run the job per tick; the
+            # others see the lock held and skip. The lock is transaction-
+            # scoped (auto-released on commit/rollback), so no explicit
+            # unlock is needed. Distinct hashtext() keys per job name keep
+            # the two cron jobs from blocking each other.
             async def _run_alert_scan() -> None:
                 async with async_session_maker() as session:
+                    acquired = (
+                        await session.execute(
+                            text("SELECT pg_try_advisory_xact_lock(hashtext('alert_engine_scan'))")
+                        )
+                    ).scalar_one()
+                    if not acquired:
+                        logging.info("SCHEDULER_ALERT_SCAN_SKIPPED reason=lock_held_by_other_worker")
+                        return
                     counts = await AlertEngine(session).scan()
                     await session.commit()
                     logging.info(
@@ -159,6 +176,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
                 yesterday = business_today() - timedelta(days=1)
                 async with async_session_maker() as session:
+                    acquired = (
+                        await session.execute(
+                            text("SELECT pg_try_advisory_xact_lock(hashtext('daily_stats_snapshot'))")
+                        )
+                    ).scalar_one()
+                    if not acquired:
+                        logging.info("SCHEDULER_DAILY_STATS_SKIPPED reason=lock_held_by_other_worker")
+                        return
                     n = await DailyStatsService(session).snapshot(snapshot_date=yesterday)
                     await session.commit()
                     logging.info(

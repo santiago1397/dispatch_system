@@ -241,10 +241,14 @@ class OpenPhoneService:
 
         Flow: for each counterparty the reply was sent to, find the
         most-recent still-``pending`` job whose inbound job message came
-        from that number, confirm the body is a reject signal (phrase or a
-        re-paste of the job with a note), confirm the reply is within the
-        next two operator outbound messages, and transition the job to the
-        terminal ``rejected`` status via the lifecycle gate.
+        from that number, confirm the body is a reject or cancel signal
+        (phrase, or a re-paste of the job with a note), confirm the reply
+        is within the next two operator outbound messages, and transition
+        the job to the terminal ``rejected``/``canceled`` status via the
+        lifecycle gate. A re-paste whose note reports the customer wasn't
+        there (e.g. "she's not there anymore") transitions to ``canceled``
+        instead of ``rejected`` — the job was accepted and worked, not
+        declined outright. See ``reject_detector.is_cancel_signal``.
         """
         from app.db.models.job_lifecycle_event import LifecycleEventSource
         from app.repositories import job as job_repo
@@ -264,7 +268,8 @@ class OpenPhoneService:
                 continue
             job, source_body = candidate
 
-            if not reject_detector.is_reject_signal(body, source_body):
+            is_cancel = reject_detector.is_cancel_signal(body, source_body)
+            if not is_cancel and not reject_detector.is_reject_signal(body, source_body):
                 continue
 
             outbound_count = await openphone_repo.count_outbound_messages_to(
@@ -282,20 +287,28 @@ class OpenPhoneService:
                 )
                 continue
 
+            to_status = LifecycleStatus.CANCELED if is_cancel else LifecycleStatus.REJECTED
+            source = (
+                LifecycleEventSource.OPERATOR_CANCEL
+                if is_cancel
+                else LifecycleEventSource.OPERATOR_REJECT
+            )
             await LifecycleService(self.db).transition(
                 job=job,
-                to_status=LifecycleStatus.REJECTED,
-                source=LifecycleEventSource.OPERATOR_REJECT,
+                to_status=to_status,
+                source=source,
                 payload={
                     "counterparty": counterparty,
                     "openphone_id": message.openphone_id,
                     "body_preview": body[:120],
                     "operator_msg_index": outbound_count,
+                    **({"note": body[:120]} if is_cancel else {}),
                 },
                 at=reply_at,
             )
             logger.info(
-                "OP_REJECT_APPLIED openphone_id=%s job_id=%s counterparty=%s outbound=%d",
+                "OP_%s_APPLIED openphone_id=%s job_id=%s counterparty=%s outbound=%d",
+                "CANCEL" if is_cancel else "REJECT",
                 message.openphone_id,
                 job.id,
                 counterparty,

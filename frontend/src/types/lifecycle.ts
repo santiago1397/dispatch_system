@@ -67,6 +67,7 @@ export const LIFECYCLE_SOURCE_LABEL: Record<string, string> = {
   tech_whatsapp: "Tech reply",
   tech_openphone: "Tech reply (Quo)",
   operator_reject: "Operator reject",
+  operator_cancel: "Operator cancel (customer not there)",
   closing_chat: "Closing chat",
   manual: "Manual",
   ambiguous_attribution: "Ambiguous attribution",
@@ -93,4 +94,16 @@ export interface JobLifecycleEventList {
 export interface LifecycleTransitionInput {
   to_status: LifecycleStatus;
   note?: string | null;
+}
+
+/**
+ * Body for ``PATCH /jobs/{id}/company`` (manual company reassign/detach).
+ *
+ * Set ``company_id`` to null to detach a misclassified job from any
+ * company — it stops counting toward every company's report but keeps
+ * its row for audit. ``note`` is always required.
+ */
+export interface CompanyReassignInput {
+  company_id: string | null;
+  note: string;
 }

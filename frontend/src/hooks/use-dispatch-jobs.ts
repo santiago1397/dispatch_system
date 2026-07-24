@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient, ApiError } from "@/lib/api-client";
 import { API_ROUTES } from "@/lib/constants";
 import type {
+  CompanyReassignInput,
   DispatchJob,
   DispatchJobFilters,
   DispatchJobList,
@@ -149,6 +150,34 @@ export function useSetLifecycleStatus(id: string) {
       qc.setQueryData(["dispatch-job", id], data);
       void qc.invalidateQueries({ queryKey: ["dispatch-jobs"] });
       void qc.invalidateQueries({ queryKey: ["job-lifecycle", id] });
+    },
+  });
+}
+
+/**
+ * Manually reassign or detach (``company_id: null``) a Job's company
+ * from /jobs/[id].
+ *
+ * Detaching is the fix for misclassifications that inflate the wrong
+ * company's report — e.g. a message regex-matched via a shared broker
+ * phone number. Unlike "Rejected"/"Canceled" on the lifecycle dropdown,
+ * a detached job doesn't count toward any company's report at all,
+ * since the report only counts jobs with a non-null company_id.
+ *
+ * On success: writes the updated Job into the detail cache and
+ * invalidates the jobs list, the company report, and the lifecycle
+ * timeline (the reassignment is logged there too).
+ */
+export function useSetJobCompany(id: string) {
+  const qc = useQueryClient();
+  return useMutation<DispatchJob, ApiError, CompanyReassignInput>({
+    mutationFn: (body) => apiClient.patch<DispatchJob>(API_ROUTES.JOBS_COMPANY(id), body),
+    onSuccess: (data) => {
+      qc.setQueryData(["dispatch-job", id], data);
+      void qc.invalidateQueries({ queryKey: ["dispatch-jobs"] });
+      void qc.invalidateQueries({ queryKey: ["job-lifecycle", id] });
+      void qc.invalidateQueries({ queryKey: ["company-report"] });
+      void qc.invalidateQueries({ queryKey: ["company-report-jobs"] });
     },
   });
 }

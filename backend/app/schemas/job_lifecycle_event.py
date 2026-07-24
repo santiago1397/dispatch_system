@@ -39,3 +39,25 @@ class LifecycleTransitionIn(BaseSchema):
         default=None,
         description="Operator note. Required when to_status='canceled'.",
     )
+
+
+class CompanyReassignIn(BaseSchema):
+    """Request body for ``PATCH /jobs/{id}/company`` (manual company override).
+
+    Set ``company_id`` to null to detach the job from any company —
+    e.g. to correct a misclassification (shared broker phone, wrong regex
+    match) that's inflating a company's report count for a job that was
+    never really theirs. A detached job keeps its row (for audit) but
+    disappears from every company's report, since the report only counts
+    jobs with a non-null ``company_id``.
+    """
+
+    company_id: UUID | None = Field(
+        default=None,
+        description="Company to reassign the job to. Null detaches it from any company.",
+    )
+    note: str = Field(
+        ...,
+        min_length=1,
+        description="Required operator note explaining the correction.",
+    )

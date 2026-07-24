@@ -99,9 +99,21 @@ class AlertEngine:
             self._scan_closing_missing,
             self._scan_whatsapp_ingestion_stalled,
         ):
-            c, a = await fn(now)
-            created[fn.__name__.removeprefix("_scan_")] = c
-            already_open[fn.__name__.removeprefix("_scan_")] = a
+            name = fn.__name__.removeprefix("_scan_")
+            # Each scanner runs in its own SAVEPOINT: a bug or bad data in
+            # one scanner (e.g. an unexpected duplicate row tripping a
+            # ``scalar_one_or_none()``) must not roll back the alerts every
+            # other scanner already created in this pass — that turned one
+            # scanner's crash into a full outage of the alert engine.
+            try:
+                async with self.db.begin_nested():
+                    c, a = await fn(now)
+                created[name] = c
+                already_open[name] = a
+            except Exception:
+                logger.exception("ALERT_SCAN_STEP_FAILED scanner=%s", name)
+                created[name] = 0
+                already_open[name] = 0
 
         logger.info(
             "ALERT_SCAN_DONE created=%s already_open=%s",
@@ -547,15 +559,17 @@ class AlertEngine:
 
         existing = (
             await self.db.execute(
-                select(Alert).where(
+                select(Alert)
+                .where(
                     and_(
                         Alert.kind == AlertKind.WHATSAPP_INGESTION_STALLED.value,
                         Alert.chat_jid == _INGESTION_WATCHDOG_CHAT_JID,
                         Alert.resolved_at.is_(None),
                     )
                 )
+                .order_by(Alert.detected_at.asc())
             )
-        ).scalar_one_or_none()
+        ).scalars().first()
 
         if has_active_chat is None:
             # Nothing tracked at all — not an outage, just no config.

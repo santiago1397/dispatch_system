@@ -609,7 +609,8 @@ class WhatsappService:
             return False
         job, source_body = candidate
 
-        if not reject_detector.is_reject_signal(body, source_body):
+        is_cancel = reject_detector.is_cancel_signal(body, source_body)
+        if not is_cancel and not reject_detector.is_reject_signal(body, source_body):
             return False
 
         operator_msg_count = await whatsapp_repo.count_operator_messages_between(
@@ -628,21 +629,27 @@ class WhatsappService:
             )
             return False
 
+        to_status = LifecycleStatus.CANCELED if is_cancel else LifecycleStatus.REJECTED
+        source = (
+            LifecycleEventSource.OPERATOR_CANCEL if is_cancel else LifecycleEventSource.OPERATOR_REJECT
+        )
         await LifecycleService(self.db).transition(
             job=job,
-            to_status=LifecycleStatus.REJECTED,
-            source=LifecycleEventSource.OPERATOR_REJECT,
+            to_status=to_status,
+            source=source,
             payload={
                 "chat_jid": chat_jid,
                 "wa_message_id": getattr(msg, "wa_message_id", None),
                 "body_preview": body[:120],
                 "operator_msg_index": operator_msg_count,
                 "batch_id": batch_id,
+                **({"note": body[:120]} if is_cancel else {}),
             },
             at=timestamp,
         )
         logger.info(
-            "REJECT_APPLIED batch_id=%s chat_jid=%s job_id=%s wa_message_id=%s operator_msgs=%d",
+            "%s_APPLIED batch_id=%s chat_jid=%s job_id=%s wa_message_id=%s operator_msgs=%d",
+            "CANCEL" if is_cancel else "REJECT",
             batch_id,
             chat_jid,
             job.id,

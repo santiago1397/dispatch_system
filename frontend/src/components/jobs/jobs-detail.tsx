@@ -19,6 +19,7 @@ import { StatusBadge } from "./status-badge";
 import { LifecycleStatusBadge } from "./lifecycle-status-badge";
 import { LifecycleDropdown } from "./lifecycle-dropdown";
 import { LifecycleTimeline } from "./lifecycle-timeline";
+import { CompanyReassignControl } from "./company-reassign-control";
 
 /** Friendly labels for the tech-reply reason codes (canceled / follow-up). */
 const REASON_LABEL: Record<string, string> = {
@@ -174,10 +175,17 @@ export function JobsDetail() {
             {job.classification_error ? (
               <p className="text-destructive mt-1 text-xs">{job.classification_error}</p>
             ) : null}
-            <div className="mt-2">
+            <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:gap-4">
               <LifecycleDropdown
                 jobId={job.id}
                 current={job.lifecycle_status}
+                onResult={(r) => setStatusBanner(r)}
+                disabled={reclassify.isPending || rematchClosing.isPending}
+              />
+              <CompanyReassignControl
+                jobId={job.id}
+                currentCompanyId={job.company_id}
+                currentCompanyName={job.company_name}
                 onResult={(r) => setStatusBanner(r)}
                 disabled={reclassify.isPending || rematchClosing.isPending}
               />

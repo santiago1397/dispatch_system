@@ -419,6 +419,27 @@ async def set_lifecycle_status(
     return job
 
 
+async def set_company(
+    db: AsyncSession,
+    *,
+    job: Job,
+    company_id: uuid.UUID | None,
+) -> Job:
+    """Manually reassign (or detach, if ``company_id`` is None) a Job's company.
+
+    Used for correcting misclassifications after the fact — e.g. a message
+    was regex-matched to the wrong company via a shared broker phone number.
+    Setting ``company_id`` to None removes the job from every company's
+    report (``get_company_status_breakdown`` filters on
+    ``company_id IS NOT NULL``) without deleting the underlying row.
+    """
+    job.company_id = company_id
+    db.add(job)
+    await db.flush()
+    await db.refresh(job)
+    return job
+
+
 async def list_by_status(
     db: AsyncSession,
     status: str,

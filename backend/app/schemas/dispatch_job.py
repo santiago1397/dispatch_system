@@ -188,3 +188,35 @@ class TechReplyIntent(BaseModel):
     follow_up_at: str | None = None
     reason: str | None = None
     notes: str | None = None
+
+
+# Intent codes for an operator's relay reply back to a company/broker's own
+# number (as opposed to a technician's dispatch chat). Unlike
+# ``TechReplyIntentCode``, this is NOT exhaustive over every possible
+# operator remark — most operator replies in these threads are plain acks
+# ("ok", "ty") that carry no status information at all, so ``none`` is a
+# genuine no-op rather than a forced guess.
+CompanyRelayIntentCode = Literal["no_answer_follow_up", "none"]
+
+
+class CompanyRelayIntent(BaseModel):
+    """Structured output from AI parsing of an operator→company relay reply.
+
+    Only classifies the one signal the pipeline currently acts on: the
+    operator reporting that the customer hasn't answered / called back and
+    they're still trying (e.g. "Na did not call back lef vm"). This should
+    push an open Job to ``needs_follow_up`` instead of leaving it silently
+    in whatever status it was in — see ``services/company_relay_parser.py``.
+
+    ``intent='none'`` covers everything else (acks, appointment
+    confirmations, payment relays, unrelated chatter) so a plain "ok"
+    never triggers a lifecycle transition.
+
+    ``follow_up_at`` (only for ``no_answer_follow_up``): the ISO-8601 time
+    to try the customer again, computed the same way as
+    ``TechReplyIntent.follow_up_at``.
+    """
+
+    intent: CompanyRelayIntentCode
+    follow_up_at: str | None = None
+    notes: str | None = None

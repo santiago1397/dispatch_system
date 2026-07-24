@@ -257,6 +257,19 @@ class LifecycleService:
                 kinds=[alert_repo.AlertKind.FOLLOW_UP_DUE.value],
             )
 
+        # A job entering ``needs_follow_up`` now has an operator-reported
+        # reason it's not moving; ``_scan_closing_missing`` no longer scans
+        # this status (see its docstring), but a prior alert raised while
+        # the job was still e.g. ``dispatched`` may already be open. Clear
+        # it so the dashboard reflects that the job is being actively
+        # chased, not silently forgotten.
+        if to_status == LifecycleStatus.NEEDS_FOLLOW_UP:
+            await alert_repo.auto_resolve_for_job(
+                self.db,
+                job_id=job.id,
+                kinds=[alert_repo.AlertKind.CLOSING_MISSING.value],
+            )
+
         # Auto-resolve any stuck alerts once the job leaves the offending
         # status. This keeps the dashboard clean without requiring the
         # operator to manually resolve alerts that have self-cleared.

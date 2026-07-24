@@ -397,6 +397,55 @@ async def find_reject_candidate_openphone(
     return job, (content or "")
 
 
+# Non-terminal statuses eligible for a company-relay follow-up update.
+# Excludes ``completed``/``closed``/``canceled``/``rejected`` — those jobs
+# are done, so a later "customer never answered" remark in the same thread
+# can't be about them. Kept as plain strings (matching ``Job.lifecycle_status``,
+# a VARCHAR column) rather than importing ``LifecycleStatus`` to avoid a
+# circular import between ``repositories.job`` and ``services.lifecycle``.
+_FOLLOW_UP_ELIGIBLE_STATUSES = (
+    "pending",
+    "dispatched",
+    "accepted",
+    "in_progress",
+    "appt_set",
+    "needs_follow_up",
+)
+
+
+async def find_follow_up_candidate_openphone(
+    db: AsyncSession,
+    *,
+    counterparty: str,
+    before: datetime,
+) -> Job | None:
+    """Find the most-recent open Job an operator's status update is about.
+
+    Same conversation-keyed lookup as :func:`find_reject_candidate_openphone`
+    (matches the pending/open Job whose originating inbound message came
+    ``from_number == counterparty``), but not restricted to ``pending`` —
+    a "customer never answered, left a vm" update is expected to land well
+    after intake, once the job has already moved past it. Returns just the
+    ``Job`` (unlike the reject candidate, callers here don't need the
+    original job body for a re-paste comparison).
+    """
+    query = (
+        select(Job)
+        .join(DispatchJob, DispatchJob.job_id == Job.id)
+        .join(IncomingMessage, IncomingMessage.id == DispatchJob.incoming_message_id)
+        .where(
+            IncomingMessage.source == "openphone",
+            IncomingMessage.direction == "incoming",
+            IncomingMessage.from_number == counterparty,
+            Job.lifecycle_status.in_(_FOLLOW_UP_ELIGIBLE_STATUSES),
+            Job.first_message_at < before,
+        )
+        .order_by(Job.first_message_at.desc())
+        .limit(1)
+    )
+    return (await db.execute(query)).scalar_one_or_none()
+
+
 async def set_lifecycle_status(
     db: AsyncSession,
     *,

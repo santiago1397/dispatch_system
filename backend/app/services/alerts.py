@@ -488,6 +488,14 @@ class AlertEngine:
         closing-pipeline event (``source='closing_chat'``) since those
         are already in flight; the alert fires when the closing is just
         missing.
+
+        ``needs_follow_up`` is deliberately excluded from the scanned set:
+        a job in that status has an operator-reported reason it's not
+        moving (customer didn't answer, price-shopping, etc.) and its own
+        ``follow_up_due`` reminder already nags the operator — see
+        ``_scan_follow_up_due``. Counting it against ``first_message_at``
+        here as well would double-alert on a job that's actively being
+        chased, not one that's been silently forgotten.
         """
         threshold_minutes = settings.ALERTS_CLOSING_GRACE_MINUTES
         cutoff = now - timedelta(minutes=threshold_minutes)
@@ -497,7 +505,6 @@ class AlertEngine:
             LifecycleStatus.ACCEPTED.value,
             LifecycleStatus.IN_PROGRESS.value,
             LifecycleStatus.APPT_SET.value,
-            LifecycleStatus.NEEDS_FOLLOW_UP.value,
         )
         query = (
             select(Job)

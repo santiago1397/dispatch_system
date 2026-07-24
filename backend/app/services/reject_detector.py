@@ -185,6 +185,30 @@ def _looks_like_customer_unavailable_note(body: str) -> bool:
     return bool(_CUSTOMER_UNAVAILABLE_NOTE_RE.search(body))
 
 
+# Loose keyword gate for "operator is reporting a customer-contact attempt"
+# — much broader than ``_CUSTOMER_UNAVAILABLE_NOTE_RE`` (which is scoped to
+# the re-paste-with-note reject/cancel path). Used only to decide whether a
+# standalone operator reply to a company/broker number is worth the LLM
+# call in ``services/company_relay_parser.py``; the LLM makes the actual
+# no_answer_follow_up/none decision, so over-matching here just costs an
+# extra (cheap) model call, never a wrong lifecycle transition.
+_CONTACT_ATTEMPT_KEYWORD_RE = re.compile(
+    r"\bvm\b|\bvoicemail\b|\banswer(?:ed|ing)?\b|\bpick(?:s|ed|ing)?\s*up\b"
+    r"|\bcall\s*back\b|\bcallback\b|\breach(?:ed|ing)?\b|\bunresponsive\b"
+    r"|\bno\s+response\b|\bnot\s+responding\b|\bstill\s+trying\b|\bna\b",
+    re.IGNORECASE,
+)
+
+
+def mentions_customer_contact_attempt(body: str) -> bool:
+    """True if ``body`` reads like a customer-contact-attempt update.
+
+    Cheap pre-filter before the LLM-based company-relay parser — see
+    :data:`_CONTACT_ATTEMPT_KEYWORD_RE`.
+    """
+    return bool(_CONTACT_ATTEMPT_KEYWORD_RE.search(body))
+
+
 def _looks_like_data_question(body: str) -> bool:
     """True if ``body`` reads as a question / data-correction request
     rather than a job decline (see :data:`_DATA_QUESTION_RE`)."""

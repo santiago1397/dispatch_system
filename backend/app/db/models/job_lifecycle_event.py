@@ -48,6 +48,12 @@ class LifecycleEventSource(StrEnum):
     # Distinct from OPERATOR_REJECT: the job was accepted and worked, not
     # declined outright. See ``services/reject_detector.py``.
     OPERATOR_CANCEL = "operator_cancel"
+    # Operator's free-text reply to a company/broker's own number (not a
+    # technician chat) reporting the customer hasn't answered/called back
+    # and they're still trying — pushes the Job to ``needs_follow_up``
+    # instead of leaving it silently in place. See
+    # ``services/company_relay_parser.py``.
+    OPERATOR_RELAY = "operator_relay"
     # The inbound job request itself already stated an appointment date/time
     # (e.g. "Date: 7/10/2026, Hours: 12:00 PM to 2:00 PM"), extracted at
     # classification time — before any operator/tech has acted on the job.

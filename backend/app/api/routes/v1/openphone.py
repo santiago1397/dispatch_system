@@ -177,7 +177,11 @@ async def receive_openphone_webhook(
             # classify outbound as a new job, but it may be a job REJECTION
             # ("pass"/"have it"/"<zip> pass"/re-paste with a note) aimed at
             # the company that texted the job in — decline the matching
-            # pending Job so the alert engine never flags it.
+            # pending Job so the alert engine never flags it. Failing that,
+            # it may be a "customer no-answer, still trying" update — push
+            # the matching open Job to ``needs_follow_up`` instead of
+            # silently leaving it in place (see
+            # ``services/company_relay_parser.py``).
             if (message.direction or "").lower() == "outgoing":
                 try:
                     from app.repositories import openphone as openphone_repo
@@ -185,7 +189,13 @@ async def receive_openphone_webhook(
                     async with get_db_context() as reject_db:
                         fresh = await openphone_repo.get_incoming_message(reject_db, message.id)
                         if fresh is not None:
-                            await OpenPhoneService(reject_db).maybe_reject_job(fresh)
+                            rejected = await OpenPhoneService(reject_db).maybe_reject_job(fresh)
+                            if not rejected:
+                                from app.services.company_relay_parser import (
+                                    maybe_apply_no_answer_update,
+                                )
+
+                                await maybe_apply_no_answer_update(reject_db, fresh)
                             await reject_db.commit()
                 except Exception:
                     logger.exception("Failed reject-detection for OpenPhone message %s", message.id)

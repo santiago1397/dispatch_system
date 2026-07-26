@@ -28,6 +28,7 @@ sites have always used. Call sites pass the temperature they want from a
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -72,13 +73,31 @@ _FALLBACK_MAX_RETRIES = 2
 #: transient and cheap to re-attempt once before spending OpenAI tokens.
 _RATE_LIMIT_BACKOFF_S = 2.0
 
-#: langchain-openai 1.x defaults ``with_structured_output`` to
-#: ``json_schema``, i.e. OpenAI's structured-outputs ``.parse()`` path.
-#: MiniMax's OpenAI-compatible endpoint documents ``tools`` but NOT
-#: ``response_format``/json_schema, so the primary is pinned to the
-#: tool-calling method it actually supports. OpenAI keeps the langchain
-#: default so the fallback behaves exactly as every call site did before.
-_MINIMAX_STRUCTURED_METHOD = "function_calling"
+#: How MiniMax is made to emit structured output. Measured against the
+#: live API with MiniMax-M2.7 (see the ``llm-smoke`` gate):
+#:
+#: - ``json_schema`` (langchain-openai 1.x default) — OpenAI's ``.parse()``
+#:   path. MiniMax documents ``tools`` but not ``response_format``, and
+#:   ``.parse()`` also rejects ``extra_body`` passengers via model_kwargs.
+#: - ``function_calling`` — works for small enum schemas
+#:   (``TechReplyIntent``) but returns a tool call with EMPTY arguments for
+#:   the 13-field ``JobExtraction``, at every temperature and up to
+#:   max_tokens=8192. Schema-valid, entirely null: the worst outcome,
+#:   because the extraction sites accept all-null as legitimate.
+#: - ``json_mode`` alone — the model reads the message correctly but
+#:   invents its own nested shape, since json_mode sends no schema.
+#: - ``json_mode`` + the schema pasted into the prompt — extracts
+#:   correctly and reproducibly. This is also what
+#:   ``app/commands/extract_backfill.py`` settled on independently.
+_MINIMAX_STRUCTURED_METHOD = "json_mode"
+
+#: Appended to the prompt when the provider needs the schema spelled out
+#: because its structured-output mode doesn't transmit one.
+_JSON_MODE_SCHEMA_INSTRUCTION = (
+    "\n\nRespond with ONLY a JSON object matching EXACTLY this JSON Schema. "
+    "Use these exact top-level keys, with no nesting and no extra keys. "
+    "Set a key to null when the value is not present.\n\n{schema}"
+)
 
 _missing_key_warned = False
 
@@ -116,6 +135,9 @@ class _ProviderCall:
     #: default (``json_schema``), which is what every call site used
     #: before this module existed.
     structured_method: str | None = None
+    #: Paste the JSON Schema into the prompt. Required for ``json_mode``,
+    #: which transmits no schema of its own.
+    schema_in_prompt: bool = False
 
     @property
     def retry_on_rate_limit(self) -> bool:
@@ -184,6 +206,7 @@ def _minimax_spec() -> _ProviderCall:
         top_p=_MINIMAX_TOP_P,
         extra_body={"reasoning_split": True},
         structured_method=_MINIMAX_STRUCTURED_METHOD,
+        schema_in_prompt=True,
     )
 
 
@@ -249,15 +272,25 @@ def _build_structured(spec: _ProviderCall, schema: type[T]):
     return client.with_structured_output(schema, method=spec.structured_method)
 
 
+def _build_prompt(spec: _ProviderCall, schema: type[T], prompt: str) -> str:
+    """Append the JSON Schema when the provider's mode doesn't send one."""
+    if not spec.schema_in_prompt:
+        return prompt
+    return prompt + _JSON_MODE_SCHEMA_INSTRUCTION.format(
+        schema=json.dumps(schema.model_json_schema())
+    )
+
+
 async def _attempt(spec: _ProviderCall, schema: type[T], prompt: str, *, site: str) -> T:
     """Invoke one provider, retrying once on 429 when that provider allows it."""
     structured = _build_structured(spec, schema)
+    final_prompt = _build_prompt(spec, schema, prompt)
     max_attempts = 2 if spec.retry_on_rate_limit else 1
 
     for attempt in range(1, max_attempts + 1):
         started = time.monotonic()
         try:
-            result = await structured.ainvoke(prompt)
+            result = await structured.ainvoke(final_prompt)
             if result is None:
                 raise LLMStructuredOutputError(
                     f"{spec.provider} returned no structured output for {schema.__name__}"
@@ -352,29 +385,40 @@ async def ainvoke_structured(
     raise last_exc or AssertionError("empty provider chain")  # pragma: no cover
 
 
-def build_probe_structured(provider: str, schema: type[T], *, temperature: float = 0.0):
-    """Bind ``schema`` to ONE provider, with no DB lookup and no fallback.
-
-    Used by the ``llm-smoke`` diagnostic. Probing a single provider in
-    isolation is the entire point — the automatic fallback would otherwise
-    mask a primary that cannot produce structured output at all.
+def probe_spec(provider: str, *, temperature: float = 0.0) -> _ProviderCall:
+    """The spec for ONE provider, with no DB lookup and no fallback.
 
     Built from the same ``_minimax_spec`` / ``_openai_spec`` the runtime
-    path uses, so the probe can never drift from what production does.
-    Credentials come from env only, so this deliberately ignores any
-    ``app_settings`` DB override of the OpenAI key.
+    path uses, so the ``llm-smoke`` probe can never drift from what
+    production does. Credentials come from env only, so this deliberately
+    ignores any ``app_settings`` DB override of the OpenAI key.
     """
     if provider == MINIMAX:
-        spec = _minimax_spec()
-    elif provider == OPENAI:
-        spec = _openai_spec(
+        return _minimax_spec()
+    if provider == OPENAI:
+        return _openai_spec(
             base_url=settings.AI_BASE_URL,
             api_key=settings.OPENAI_API_KEY,
             temperature=temperature,
         )
-    else:  # pragma: no cover - guarded by click.Choice at the call site
-        raise ValueError(f"unknown provider {provider!r}")
-    return _build_structured(spec, schema)
+    raise ValueError(f"unknown provider {provider!r}")
+
+
+async def probe_invoke(
+    provider: str, schema: type[T], prompt: str, *, temperature: float = 0.0
+) -> T:
+    """Run one prompt against ONE provider — no fallback, no retry wrapper.
+
+    Probing a single provider in isolation is the entire point of the
+    ``llm-smoke`` gate: the automatic fallback would otherwise mask a
+    primary that cannot produce usable structured output.
+
+    Goes through the same method selection and prompt augmentation as the
+    runtime path, so a pass here means the real call sites will work.
+    """
+    spec = probe_spec(provider, temperature=temperature)
+    structured = _build_structured(spec, schema)
+    return await structured.ainvoke(_build_prompt(spec, schema, prompt))
 
 
 def _is_degraded() -> bool:

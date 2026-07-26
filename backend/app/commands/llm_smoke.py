@@ -34,7 +34,7 @@ from app.schemas.dispatch_job import (
     JobExtraction,
     TechReplyIntent,
 )
-from app.services.llm import MINIMAX, OPENAI, build_probe_structured
+from app.services.llm import MINIMAX, OPENAI, probe_invoke
 
 #: One representative prompt per production schema. These mirror the shape
 #: of the real prompts (short instruction + a realistic dispatch message)
@@ -58,7 +58,15 @@ _SAMPLE_CLOSING = (
     "FINAL: collected $210 cash, parts $25, tip $15. Warranty 90 days."
 )
 
-PROBES: list[tuple[str, type, str]] = [
+#: (site, schema, prompt, expected) where ``expected`` maps a field name to
+#: a substring its value must contain, case-insensitively.
+#:
+#: Checking CONTENT and not just schema conformance is essential. MiniMax
+#: via ``function_calling`` happily returns a perfectly valid, entirely
+#: null JobExtraction — and the extraction call sites accept all-null as
+#: legitimate, so nothing downstream would ever notice. A schema-only gate
+#: reports that as PASS and lets empty jobs reach the database.
+PROBES: list[tuple[str, type, str, dict[str, str]]] = [
     (
         "classify_company",
         CompanyClassification,
@@ -67,6 +75,7 @@ PROBES: list[tuple[str, type, str]] = [
         f"Message:\n{_SAMPLE_JOB}\n\n"
         "Respond with the best-matching company name, your confidence (0-1), "
         "and reasoning. If no company matches, return null for company_name.",
+        {"company_name": "Speedy Locksmith"},
     ),
     (
         "extract_fields",
@@ -74,6 +83,13 @@ PROBES: list[tuple[str, type, str]] = [
         "You are a dispatch data extractor. Extract the structured fields "
         f"from this job dispatch message.\n\nMessage:\n{_SAMPLE_JOB}\n\n"
         "Only extract values clearly present. Set anything absent to null.",
+        {
+            "address": "Belmont",
+            "job_type": "Lockout",
+            "total": "185",
+            "tech_name": "Marcus",
+            "customer_name": "Jane",
+        },
     ),
     (
         "extract_closing",
@@ -81,6 +97,8 @@ PROBES: list[tuple[str, type, str]] = [
         "You are a dispatch CLOSING extractor. Return the FINAL payment "
         "information, never the earlier estimate.\n\n"
         f"Message:\n{_SAMPLE_CLOSING}",
+        # 210 not 185 — proves it took the final total, not the estimate.
+        {"total": "210", "payment_method": "cash"},
     ),
     (
         "company_relay_intent",
@@ -89,6 +107,7 @@ PROBES: list[tuple[str, type, str]] = [
         "company about a job that is still open. Classify into exactly one "
         'of two codes.\n\nMessage:\n"Customer never answered, left a '
         'voicemail, still trying"',
+        {"intent": "no_answer_follow_up"},
     ),
     (
         "tech_reply_intent",
@@ -96,6 +115,7 @@ PROBES: list[tuple[str, type, str]] = [
         "You are parsing a short reply from a technician about a dispatched "
         "job. Classify the intent into exactly one code.\n\n"
         'Message:\n"On my way, should be there in 20"',
+        {"intent": "in_progress"},
     ),
 ]
 
@@ -109,19 +129,34 @@ def _percentile(values: list[int], pct: float) -> int:
     return ordered[rank - 1]
 
 
-async def _probe_once(provider: str, schema: type, prompt: str) -> tuple[bool, str, int]:
+async def _probe_once(
+    provider: str, schema: type, prompt: str, expected: dict[str, str]
+) -> tuple[bool, str, int]:
     """Return (ok, detail, latency_ms) for one schema against one provider."""
-    client = build_probe_structured(provider, schema)
     started = time.monotonic()
     try:
-        result = await client.ainvoke(prompt)
+        result = await probe_invoke(provider, schema, prompt)
     except Exception as exc:
         return False, f"{type(exc).__name__}: {exc}", int((time.monotonic() - started) * 1000)
     latency = int((time.monotonic() - started) * 1000)
+
     if result is None:
-        return False, "returned no structured output (no tool call emitted)", latency
+        return False, "returned no structured output", latency
     if not isinstance(result, schema):
         return False, f"returned {type(result).__name__}, expected {schema.__name__}", latency
+
+    # Content check. Schema conformance alone is not enough — see PROBES.
+    data = result.model_dump()
+    wrong = []
+    for field, want in expected.items():
+        got = data.get(field)
+        if got is None:
+            wrong.append(f"{field}=null (expected ~{want!r})")
+        elif want.lower() not in str(got).lower():
+            wrong.append(f"{field}={str(got)[:40]!r} (expected ~{want!r})")
+    if wrong:
+        return False, "wrong content: " + "; ".join(wrong), latency
+
     return True, result.model_dump_json()[:120], latency
 
 
@@ -136,12 +171,12 @@ async def _run(provider: str, runs: int) -> int:
     all_latencies: list[int] = []
     failed: list[str] = []
 
-    for site, schema, prompt in PROBES:
+    for site, schema, prompt, expected in PROBES:
         latencies: list[int] = []
         errors: list[str] = []
         sample = ""
         for _ in range(runs):
-            ok, detail, latency = await _probe_once(provider, schema, prompt)
+            ok, detail, latency = await _probe_once(provider, schema, prompt, expected)
             latencies.append(latency)
             if ok:
                 sample = sample or detail

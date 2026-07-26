@@ -17,8 +17,8 @@ from app.services.llm import (
     MINIMAX,
     OPENAI,
     ainvoke_structured,
-    build_probe_structured,
     describe_chain,
+    probe_spec,
 )
 
 
@@ -165,9 +165,11 @@ async def test_minimax_uses_vendor_sampling_and_no_internal_retries(wire, minima
     # reasoning_split MUST travel via extra_body. Via model_kwargs it reaches
     # AsyncCompletions.parse(), which rejects unknown kwargs with TypeError.
     assert spec.extra_body == {"reasoning_split": True}
-    # MiniMax documents `tools` but not response_format/json_schema, and
-    # langchain-openai 1.x defaults to json_schema.
-    assert spec.structured_method == "function_calling"
+    # Measured against the live API: function_calling returns EMPTY tool
+    # arguments for wide schemas, and json_schema is unsupported. Only
+    # json_mode + schema-in-prompt actually extracts.
+    assert spec.structured_method == "json_mode"
+    assert spec.schema_in_prompt is True
 
 
 @pytest.mark.anyio
@@ -186,6 +188,7 @@ async def test_fallback_keeps_caller_temperature_and_retries(wire, minimax_prima
     # None keeps langchain's default, i.e. exactly what every call site
     # did before this module existed.
     assert fallback.structured_method is None
+    assert fallback.schema_in_prompt is False
 
 
 # --- hard failures fall back -----------------------------------------
@@ -367,20 +370,37 @@ def test_reasoning_split_goes_in_extra_body_not_model_kwargs(minimax_primary):
     assert not client.model_kwargs
 
 
-def test_minimax_structured_output_uses_function_calling(minimax_primary):
-    """MiniMax documents `tools`, not response_format/json_schema.
+def test_minimax_structured_output_binds(minimax_primary):
+    """Building the runnable proves LangChain accepts the method name.
 
-    Building the runnable also proves LangChain accepts the method name;
-    an invalid one raises at bind time.
+    An unsupported method raises at bind time, so this catches a typo or a
+    method removed by a future langchain-openai release.
     """
     runnable = llm_module._build_structured(llm_module._minimax_spec(), Sample)
     assert runnable is not None
 
 
-def test_probe_builds_for_both_providers(minimax_primary):
-    """The probe shares the runtime specs, so it cannot drift from prod."""
-    for provider in (MINIMAX, OPENAI):
-        assert build_probe_structured(provider, Sample) is not None
+def test_minimax_prompt_carries_the_json_schema(minimax_primary):
+    """json_mode transmits no schema, so it must be in the prompt.
+
+    Without this the model reads the message correctly but invents its own
+    nested shape, which then fails validation.
+    """
+    out = llm_module._build_prompt(llm_module._minimax_spec(), Sample, "DO THE THING")
+
+    assert out.startswith("DO THE THING")
+    assert "confidence" in out and "value" in out, "schema field names must appear"
+
+
+def test_openai_prompt_is_left_alone(openai_only):
+    spec = llm_module._openai_spec(base_url="u", api_key="k", temperature=0.0)
+    assert llm_module._build_prompt(spec, Sample, "DO THE THING") == "DO THE THING"
+
+
+def test_probe_shares_runtime_specs(minimax_primary):
+    """The probe must not drift from prod — that is how the first bug hid."""
+    assert probe_spec(MINIMAX) == llm_module._minimax_spec()
+    assert probe_spec(OPENAI).provider == OPENAI
 
 
 # --- startup banner ---------------------------------------------------

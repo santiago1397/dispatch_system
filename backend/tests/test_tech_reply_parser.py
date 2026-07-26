@@ -94,12 +94,16 @@ def _fake_llm_config():
 
 
 def _patch_app_settings(service_get_llm):
-    """Patch AppSettingsService as imported into tech_reply_parser so
-    ``AppSettingsService(db).get_llm_config()`` returns ``service_get_llm``."""
+    """Patch AppSettingsService where the LLM helper resolves credentials.
+
+    The parser no longer builds its own client — it calls
+    ``app.services.llm.ainvoke_structured``, which is what reads
+    ``AppSettingsService(db).get_llm_config()`` now.
+    """
     service_instance = MagicMock()
     service_instance.get_llm_config = AsyncMock(return_value=service_get_llm)
     service_cls = MagicMock(return_value=service_instance)
-    return patch("app.services.tech_reply_parser.AppSettingsService", new=service_cls)
+    return patch("app.services.llm.AppSettingsService", new=service_cls)
 
 
 def _patch_lifecycle_service_returning(event_id=None):
@@ -116,13 +120,22 @@ def _patch_lifecycle_service_returning(event_id=None):
     )
 
 
-def _patch_chat_openai(intent: TechReplyIntent):
-    """Patch the ChatOpenAI import; the structured LLM returns ``intent``."""
+def _patch_llm_returning(result):
+    """Patch the provider client factory behind ``ainvoke_structured``.
+
+    Intercepting ``app.services.llm._build_client`` rather than
+    ``ChatOpenAI`` keeps the dual-provider selection and fallback logic in
+    the path, so these tests still exercise the real call route. Pass an
+    exception instance to simulate a provider failure.
+    """
     structured = MagicMock()
-    structured.ainvoke = AsyncMock(return_value=intent)
-    llm = MagicMock()
-    llm.with_structured_output = MagicMock(return_value=structured)
-    return patch("app.services.tech_reply_parser.ChatOpenAI", return_value=llm)
+    if isinstance(result, BaseException):
+        structured.ainvoke = AsyncMock(side_effect=result)
+    else:
+        structured.ainvoke = AsyncMock(return_value=result)
+    client = MagicMock()
+    client.with_structured_output = MagicMock(return_value=structured)
+    return patch("app.services.llm._build_client", return_value=client)
 
 
 @asynccontextmanager
@@ -269,13 +282,13 @@ class TestExtractIntent:
     async def test_extract_intent_invokes_structured_llm(self):
         expected = TechReplyIntent(intent="in_progress", appt_iso=None, notes=None)
 
-        with _patch_app_settings(_fake_llm_config()), _patch_chat_openai(expected) as llm_ctor:
+        with _patch_app_settings(_fake_llm_config()), _patch_llm_returning(expected) as build:
             result = await _extract_intent(AsyncMock(), "on the way")
 
         assert result is expected
-        llm_ctor.assert_called_once()
+        build.assert_called_once()
         # with_structured_output was called with the schema class.
-        llm_ctor.return_value.with_structured_output.assert_called_once_with(TechReplyIntent)
+        build.return_value.with_structured_output.assert_called_once_with(TechReplyIntent)
 
 
 # ---------------------------------------------------------------------------
@@ -314,7 +327,7 @@ class TestParseTechReply:
 
         with (
             _patch_app_settings(_fake_llm_config()),
-            _patch_chat_openai(intent),
+            _patch_llm_returning(intent),
             lifecycle_patch,
             patch("app.repositories.job.get_job_by_id", new=AsyncMock(return_value=job)),
         ):
@@ -359,7 +372,7 @@ class TestParseTechReply:
 
         with (
             _patch_app_settings(_fake_llm_config()),
-            _patch_chat_openai(intent),
+            _patch_llm_returning(intent),
             lifecycle_patch,
             patch("app.repositories.job.get_job_by_id", new=AsyncMock(return_value=job)),
         ):
@@ -448,12 +461,8 @@ class TestParseTechReply:
 
         with (
             _patch_app_settings(_fake_llm_config()),
-            patch("app.services.tech_reply_parser.ChatOpenAI") as llm_ctor,
+            _patch_llm_returning(RuntimeError("LLM exploded")),
         ):
-            structured = MagicMock()
-            structured.ainvoke = AsyncMock(side_effect=RuntimeError("LLM exploded"))
-            llm_ctor.return_value.with_structured_output.return_value = structured
-
             source, intent = await parse_tech_reply(db, wa_message=msg)
 
         assert source == "tech_whatsapp"

@@ -27,10 +27,8 @@ import re
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from langchain_openai import ChatOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.db.models.company import Company
 from app.db.models.dispatch_job import ClassificationStatus, DispatchJob
 from app.db.models.job_lifecycle_event import LifecycleEventSource
@@ -38,8 +36,8 @@ from app.db.models.openphone import IncomingMessage
 from app.repositories import company_repo, dispatch_job_repo, job_repo, phone_binding_repo
 from app.schemas.dispatch_job import ClosingExtraction, CompanyClassification, JobExtraction
 from app.services.address_normalizer import normalize_address, normalize_phone
-from app.services.app_settings import AppSettingsService
 from app.services.lifecycle import LifecycleService, LifecycleStatus
+from app.services.llm import ainvoke_structured
 from app.services.timeparse import parse_iso8601
 
 logger = logging.getLogger(__name__)
@@ -506,15 +504,6 @@ class JobClassificationService:
             if not company_names:
                 return None
 
-            llm_config = await AppSettingsService(self.db).get_llm_config()
-            llm = ChatOpenAI(
-                model=settings.AI_MODEL,
-                temperature=0.1,
-                base_url=llm_config.base_url,
-                api_key=llm_config.api_key,
-            )
-            structured_llm = llm.with_structured_output(CompanyClassification)
-
             prompt = (
                 "You are a dispatch message classifier. Given a job dispatch message and a list "
                 "of known companies, identify which company sent this message.\n\n"
@@ -524,7 +513,17 @@ class JobClassificationService:
                 "and reasoning. If no company matches, return null for company_name."
             )
 
-            result = await structured_llm.ainvoke(prompt)
+            result = await ainvoke_structured(
+                self.db,
+                CompanyClassification,
+                prompt,
+                site="classify_company",
+                temperature=0.1,
+                # An ambiguous sender is exactly where the stronger fallback
+                # model earns its cost, so escalate rather than give up. The
+                # threshold below still applies to whatever comes back.
+                accept=lambda r: bool(r.company_name) and r.confidence >= 0.5,
+            )
 
             if result.company_name and result.confidence >= 0.5:
                 company = await company_repo.get_by_name(self.db, result.company_name)
@@ -595,15 +594,6 @@ class JobClassificationService:
 
     async def _extract_fields(self, content: str, company: Company) -> JobExtraction:
         """Use AI to extract 13 fields from the message."""
-        llm_config = await AppSettingsService(self.db).get_llm_config()
-        llm = ChatOpenAI(
-            model=settings.AI_MODEL,
-            temperature=0.0,
-            base_url=llm_config.base_url,
-            api_key=llm_config.api_key,
-        )
-        structured_llm = llm.with_structured_output(JobExtraction)
-
         prompt = (
             "You are a dispatch data extractor. Extract structured information from this "
             "job dispatch message.\n\n"
@@ -634,7 +624,9 @@ class JobClassificationService:
             "Set to null if not found."
         )
 
-        return await structured_llm.ainvoke(prompt)
+        return await ainvoke_structured(
+            self.db, JobExtraction, prompt, site="extract_fields"
+        )
 
     async def _process_closing_message(
         self,
@@ -826,15 +818,6 @@ class JobClassificationService:
         earlier in the message — closings often re-paste the original job
         with its estimate, then the actuals follow at the end.
         """
-        llm_config = await AppSettingsService(self.db).get_llm_config()
-        llm = ChatOpenAI(
-            model=settings.AI_MODEL,
-            temperature=0.0,
-            base_url=llm_config.base_url,
-            api_key=llm_config.api_key,
-        )
-        structured_llm = llm.with_structured_output(ClosingExtraction)
-
         prompt = (
             "You are a dispatch CLOSING extractor. The message below was sent to "
             "the 'Dispatch closing' WhatsApp group when a job was completed. "
@@ -855,7 +838,9 @@ class JobClassificationService:
             "- notes: Any additional closing notes (warranty, split payment, etc.)"
         )
 
-        return await structured_llm.ainvoke(prompt)
+        return await ainvoke_structured(
+            self.db, ClosingExtraction, prompt, site="extract_closing"
+        )
 
     async def _update_status(
         self,

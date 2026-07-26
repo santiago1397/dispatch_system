@@ -285,9 +285,13 @@ def _make_message(
 
 
 def _mock_extraction_llm(monkeypatch, *, address: str, job_type: str = "House Lockout") -> None:
-    """Patch ChatOpenAI inside the classification module to return canned
-    field-extraction output. Used by tests that go through the regex
-    company path (so the company-classify LLM is never called)."""
+    """Return canned field-extraction output from the LLM layer.
+
+    Classification routes through ``app.services.llm.ainvoke_structured``
+    now, so we intercept its client factory rather than ``ChatOpenAI``.
+    That leaves provider selection and fallback in the path. Used by tests
+    that go through the regex company path (so the company-classify LLM is
+    never called)."""
 
     structured = MagicMock()
     structured.ainvoke = AsyncMock(
@@ -300,8 +304,7 @@ def _mock_extraction_llm(monkeypatch, *, address: str, job_type: str = "House Lo
     )
     instance = MagicMock()
     instance.with_structured_output.return_value = structured
-    mock_class = MagicMock(return_value=instance)
-    monkeypatch.setattr("app.services.classification.ChatOpenAI", mock_class)
+    monkeypatch.setattr("app.services.llm._build_client", MagicMock(return_value=instance))
 
 
 class TestPhoneAndAddressDetection:

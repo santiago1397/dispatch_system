@@ -30,19 +30,17 @@ committed by the time the parser runs.
 import logging
 from datetime import UTC, datetime, timedelta
 
-from langchain_openai import ChatOpenAI
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.db.models.job_lifecycle_event import LifecycleEventSource
 from app.db.models.whatsapp import WhatsappMessage
 from app.repositories import alert as alert_repo
 from app.repositories import openphone_repo, whatsapp_repo
 from app.schemas.dispatch_job import TechReplyIntent, TechReplyIntentCode
 from app.services import reject_detector
-from app.services.app_settings import AppSettingsService
 from app.services.lifecycle import LifecycleStatus
+from app.services.llm import ainvoke_structured
 
 # Tech accept/reject only counts when the reply directly quotes the dispatch
 # or falls within the technician's next two messages after it.
@@ -834,15 +832,6 @@ async def _extract_intent(db: AsyncSession, body: str) -> TechReplyIntent:
     Mirrors the ``with_structured_output`` pattern used elsewhere
     (see ``app/services/classification.py:_extract_fields``).
     """
-    llm_config = await AppSettingsService(db).get_llm_config()
-    llm = ChatOpenAI(
-        model=settings.AI_MODEL,
-        temperature=0.0,
-        base_url=llm_config.base_url,
-        api_key=llm_config.api_key,
-    )
-    structured_llm = llm.with_structured_output(TechReplyIntent)
-
     now_iso = datetime.now(UTC).isoformat()
     prompt = (
         "You are parsing a short reply from a technician about a dispatched "
@@ -885,4 +874,4 @@ async def _extract_intent(db: AsyncSession, body: str) -> TechReplyIntent:
         f"Reply:\n{body[:2000]}\n"
     )
 
-    return await structured_llm.ainvoke(prompt)
+    return await ainvoke_structured(db, TechReplyIntent, prompt, site="tech_reply_intent")

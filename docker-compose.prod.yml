@@ -19,6 +19,13 @@
 #   SECRET_KEY
 #   OPENAI_API_KEY
 #   CORS_ORIGINS=["https://santiagoproperties.uk","https://www.santiagoproperties.uk"]
+#
+# Optional (dual-provider LLM — see app/services/llm.py). Everything in
+# .env.prod is passed through via env_file, so no compose change is needed:
+#   LLM_PROVIDER=minimax        # default "openai" = single-provider, as before
+#   MINIMAX_API_KEY             # required when LLM_PROVIDER=minimax
+#   MINIMAX_MODEL=MiniMax-M2.7
+#   MINIMAX_BASE_URL=https://api.minimax.io/v1
 #   NEXT_PUBLIC_WS_URL=wss://api.santiagoproperties.uk
 #
 # Native Postgres must accept connections from the Docker bridge:

@@ -239,20 +239,39 @@ class OpenPhoneService:
         for outbound (operator→company) messages on the non-tech default
         path. Returns ``True`` when a job was transitioned to ``rejected``.
 
-        Flow: for each counterparty the reply was sent to, find the
-        most-recent still-``pending`` job whose inbound job message came
-        from that number, confirm the body is a reject or cancel signal
-        (phrase, or a re-paste of the job with a note), confirm the reply
-        is within the next two operator outbound messages, and transition
-        the job to the terminal ``rejected``/``canceled`` status via the
+        Flow: for each counterparty the reply was sent to, resolve which job
+        the reply is about, confirm the body is a reject or cancel signal
+        (phrase, or a re-paste of the job with a note), and transition the
+        job to the terminal ``rejected``/``canceled`` status via the
         lifecycle gate. A re-paste whose note reports the customer wasn't
-        there (e.g. "she's not there anymore") transitions to ``canceled``
-        instead of ``rejected`` — the job was accepted and worked, not
-        declined outright. See ``reject_detector.is_cancel_signal``.
+        there (e.g. "she's not there anymore") or never answered (e.g. "cx
+        not answering to me or to new technician I left vm") transitions to
+        ``canceled`` instead of ``rejected`` — the job was accepted and
+        worked, not declined outright. See
+        ``reject_detector.is_cancel_signal``.
+
+        Job resolution prefers the identity the reply itself names (PDL
+        code / customer phone / address — see ``services/job_reference.py``)
+        and only falls back to "most recent still-``pending`` job from this
+        counterparty" when the reply carries no identity keys at all. At
+        volume the recency fallback is close to a coin flip: a single broker
+        can have well over a hundred jobs open simultaneously.
+
+        Two window rules, which differ by outcome:
+
+        - **Reject** keeps the "within the next two operator outbound
+          messages" cutoff. Declining a job is something an operator does
+          immediately on intake, so a late "pass" is far more likely to be
+          about a different job.
+        - **Cancel** is exempt. A cancellation is reported *after* a tech
+          has been dispatched and gone to the address, which is routinely
+          hours and many messages later. Applying the reject window here is
+          what left these jobs sitting at ``pending``.
         """
         from app.db.models.job_lifecycle_event import LifecycleEventSource
         from app.repositories import job as job_repo
         from app.services import reject_detector
+        from app.services.job_reference import extract_job_reference
         from app.services.lifecycle import LifecycleService, LifecycleStatus
 
         body = (message.content or "").strip()
@@ -260,10 +279,23 @@ class OpenPhoneService:
         if not body or reply_at is None:
             return False
 
+        reference = extract_job_reference(body)
+
         for counterparty in message.to_numbers or []:
-            candidate = await job_repo.find_reject_candidate_openphone(
-                self.db, counterparty=counterparty, before=reply_at
-            )
+            candidate = None
+            matched_by = "reference"
+            if reference:
+                candidate = await job_repo.find_job_by_reference_openphone(
+                    self.db,
+                    counterparty=counterparty,
+                    before=reply_at,
+                    reference=reference,
+                )
+            if candidate is None:
+                matched_by = "recency"
+                candidate = await job_repo.find_reject_candidate_openphone(
+                    self.db, counterparty=counterparty, before=reply_at
+                )
             if candidate is None:
                 continue
             job, source_body = candidate
@@ -278,7 +310,9 @@ class OpenPhoneService:
                 after=job.first_message_at,
                 until=reply_at,
             )
-            if outbound_count > 2:
+            # The two-message cutoff guards the *reject* path only — see the
+            # docstring. A cancel legitimately arrives long after intake.
+            if not is_cancel and outbound_count > 2:
                 logger.info(
                     "OP_REJECT_TOO_LATE openphone_id=%s job_id=%s outbound=%d",
                     message.openphone_id,
@@ -302,17 +336,19 @@ class OpenPhoneService:
                     "openphone_id": message.openphone_id,
                     "body_preview": body[:120],
                     "operator_msg_index": outbound_count,
+                    "matched_by": matched_by,
                     **({"note": body[:120]} if is_cancel else {}),
                 },
                 at=reply_at,
             )
             logger.info(
-                "OP_%s_APPLIED openphone_id=%s job_id=%s counterparty=%s outbound=%d",
+                "OP_%s_APPLIED openphone_id=%s job_id=%s counterparty=%s outbound=%d matched_by=%s",
                 "CANCEL" if is_cancel else "REJECT",
                 message.openphone_id,
                 job.id,
                 counterparty,
                 outbound_count,
+                matched_by,
             )
             return True
 
@@ -359,9 +395,7 @@ class OpenPhoneService:
         labels = await thread_label_repo.get_by_counterparties(
             self.db, [t.counterparty for t in threads]
         )
-        enriched = [
-            self._merge_thread_label(t, labels.get(t.counterparty)) for t in threads
-        ]
+        enriched = [self._merge_thread_label(t, labels.get(t.counterparty)) for t in threads]
         return enriched, total
 
     @staticmethod
@@ -406,7 +440,9 @@ class OpenPhoneService:
         if company_id is not None:
             company = await company_repo.get_by_id(self.db, company_id)
             if company is None:
-                raise NotFoundError(message="Company not found", details={"company_id": str(company_id)})
+                raise NotFoundError(
+                    message="Company not found", details={"company_id": str(company_id)}
+                )
 
         return await thread_label_repo.upsert(
             self.db,

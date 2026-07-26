@@ -23,11 +23,12 @@ only observe what they did. See ``memory/feedback_no_outbound_automation.md``.
 """
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.exceptions import InvalidTransitionError, ValidationError
 from app.db.models.job import Job
 from app.db.models.job_lifecycle_event import LifecycleEventSource
@@ -195,6 +196,8 @@ class LifecycleService:
             source=source,
         )
 
+        now = at or datetime.now(UTC)
+
         # Denormalize tech-update timings onto the Job so the /jobs views
         # can show them without a per-row event query. Set on the relevant
         # transition; a parseable value overwrites, free-text is ignored.
@@ -206,13 +209,18 @@ class LifecycleService:
                 job.appt_at = appt_dt
         if to_status == LifecycleStatus.NEEDS_FOLLOW_UP:
             follow_up_dt = parse_iso8601(payload.get("follow_up_at"))
-            if follow_up_dt is not None:
-                job.follow_up_at = follow_up_dt
+            if follow_up_dt is None:
+                # No caller (LLM intent parser or manual correction) gave a
+                # usable time — fall back so the job still surfaces via the
+                # ``follow_up_due`` scanner instead of sitting unmonitored
+                # forever (``closing_missing`` skips ``needs_follow_up``
+                # entirely, assuming ``follow_up_due`` has it covered).
+                follow_up_dt = now + timedelta(minutes=settings.ALERTS_FOLLOW_UP_DEFAULT_MINUTES)
+                payload["follow_up_at"] = follow_up_dt.isoformat()
+            job.follow_up_at = follow_up_dt
         reason = payload.get("reason")
         if reason:
             job.last_tech_reason = str(reason)[:30]
-
-        now = at or datetime.now(UTC)
         event = await lifecycle_event_repo.create_event(
             self.db,
             job_id=job.id,

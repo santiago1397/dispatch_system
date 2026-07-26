@@ -53,11 +53,28 @@ async def maybe_apply_no_answer_update(db: AsyncSession, message) -> bool:
         return False
 
     from app.repositories import job as job_repo
+    from app.services.job_reference import extract_job_reference
+
+    # Prefer the job the reply explicitly names (re-pasted PDL / phone /
+    # address) over "most recent open job from this counterparty" — at
+    # volume the latter mis-targets badly, since a single broker can have
+    # well over a hundred jobs open at once. See ``job_reference``.
+    reference = extract_job_reference(body)
 
     for counterparty in message.to_numbers or []:
-        job = await job_repo.find_follow_up_candidate_openphone(
-            db, counterparty=counterparty, before=reply_at
-        )
+        job = None
+        matched_by = "reference"
+        if reference:
+            found = await job_repo.find_job_by_reference_openphone(
+                db, counterparty=counterparty, before=reply_at, reference=reference
+            )
+            if found is not None:
+                job = found[0]
+        if job is None:
+            matched_by = "recency"
+            job = await job_repo.find_follow_up_candidate_openphone(
+                db, counterparty=counterparty, before=reply_at
+            )
         if job is None:
             continue
 
@@ -85,6 +102,7 @@ async def maybe_apply_no_answer_update(db: AsyncSession, message) -> bool:
             "counterparty": counterparty,
             "openphone_id": message.openphone_id,
             "body_preview": body[:120],
+            "matched_by": matched_by,
         }
         if intent.follow_up_at:
             payload["follow_up_at"] = intent.follow_up_at
@@ -104,10 +122,11 @@ async def maybe_apply_no_answer_update(db: AsyncSession, message) -> bool:
             return False
 
         logger.info(
-            "COMPANY_RELAY_APPLIED openphone_id=%s job_id=%s counterparty=%s",
+            "COMPANY_RELAY_APPLIED openphone_id=%s job_id=%s counterparty=%s matched_by=%s",
             message.openphone_id,
             job.id,
             counterparty,
+            matched_by,
         )
         return True
 

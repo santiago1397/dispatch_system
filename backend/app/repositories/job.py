@@ -446,6 +446,92 @@ async def find_follow_up_candidate_openphone(
     return (await db.execute(query)).scalar_one_or_none()
 
 
+async def find_job_by_reference_openphone(
+    db: AsyncSession,
+    *,
+    counterparty: str,
+    before: datetime,
+    reference,
+    statuses: tuple[str, ...] = _FOLLOW_UP_ELIGIBLE_STATUSES,
+) -> tuple[Job, str] | None:
+    """Find the open Job an operator's re-paste explicitly names.
+
+    ``reference`` is an ``app.services.job_reference.JobReference`` carrying
+    whichever of PDL code / customer phone / street address the re-pasted
+    body contained. Keys are tried strongest-first and the first one that
+    resolves wins:
+
+    1. **PDL** — matched against the raw text of the job's own inbound
+       messages (the broker's per-job code is not modelled as a column).
+    2. **Customer phone** — against ``Job.customer_phone_e164``.
+    3. **Street number + name** — against the normalized address columns.
+
+    Scoped to jobs whose originating inbound message came from
+    ``counterparty``, so an update can never jump to another broker's job.
+    Returns ``(job, source_body)`` — the body being the job's originating
+    message, which callers need for the re-paste similarity comparison — or
+    ``None`` when the reply names no job this counterparty has open.
+
+    This exists because the plain "most recent open job from this
+    counterparty" lookups (:func:`find_reject_candidate_openphone`,
+    :func:`find_follow_up_candidate_openphone`) mis-target badly at volume:
+    a single broker can have well over a hundred jobs open at once, so
+    "most recent" is near-random. Callers should try this first and fall
+    back to the recency lookups only when the reply carries no identity
+    keys at all (a bare "dns"/"pass").
+    """
+    if not reference:
+        return None
+
+    base_conditions = [
+        IncomingMessage.source == "openphone",
+        IncomingMessage.direction == "incoming",
+        IncomingMessage.from_number == counterparty,
+        Job.lifecycle_status.in_(statuses),
+        Job.first_message_at < before,
+    ]
+
+    def _query(extra):
+        return (
+            select(Job, IncomingMessage.content)
+            .join(DispatchJob, DispatchJob.job_id == Job.id)
+            .join(IncomingMessage, IncomingMessage.id == DispatchJob.incoming_message_id)
+            .where(*base_conditions, extra)
+            .order_by(Job.first_message_at.desc())
+            .limit(1)
+        )
+
+    attempts = []
+    if reference.pdl:
+        # Match the code as it appears in the body ("PDL: PY3YA"). The
+        # separator varies, so anchor on the code itself and require the
+        # PDL label somewhere in the message via the second clause.
+        escaped = reference.pdl.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        attempts.append(
+            and_(
+                IncomingMessage.content.ilike(f"%{escaped}%", escape="\\"),
+                IncomingMessage.content.ilike("%pdl%", escape="\\"),
+            )
+        )
+    if reference.customer_phone_e164:
+        attempts.append(Job.customer_phone_e164 == reference.customer_phone_e164)
+    if reference.has_address:
+        attempts.append(
+            and_(
+                Job.address_street_number == reference.street_number,
+                Job.address_street_name == reference.street_name,
+            )
+        )
+
+    for extra in attempts:
+        row = (await db.execute(_query(extra))).first()
+        if row is not None:
+            job, content = row
+            return job, (content or "")
+
+    return None
+
+
 async def set_lifecycle_status(
     db: AsyncSession,
     *,

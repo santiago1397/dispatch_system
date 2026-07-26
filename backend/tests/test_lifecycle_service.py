@@ -386,3 +386,94 @@ class TestTransitionAutoResolve:
             payload={"intent": "on_the_way"},
         )
         alert_repo.auto_resolve_for_job.assert_not_called()
+
+
+class TestNeedsFollowUpDefaultTime:
+    """A ``needs_follow_up`` transition with no usable ``follow_up_at`` must
+    still get one — otherwise the job is invisible to every alert scanner
+    (``follow_up_due`` requires it; ``closing_missing`` deliberately skips
+    ``needs_follow_up`` on the assumption ``follow_up_due`` has it covered).
+    Regression: several manually-corrected jobs (reject_detector false
+    positives) were left with ``follow_up_at=None`` and would have sat
+    unmonitored indefinitely.
+    """
+
+    @pytest.mark.anyio
+    async def test_missing_follow_up_at_gets_default_fallback(self):
+        from datetime import UTC, datetime, timedelta
+
+        from app.core.config import settings
+
+        job = _make_job(lifecycle_status="pending")
+        job.follow_up_at = None
+        db = AsyncMock()
+        service = LifecycleService(db)
+
+        from app.repositories import (
+            alert as alert_repo,
+        )
+        from app.repositories import (
+            job as job_repo,
+        )
+        from app.repositories import (
+            job_lifecycle_event as lifecycle_event_repo,
+        )
+
+        event = MagicMock()
+        event.id = uuid4()
+        lifecycle_event_repo.create_event = AsyncMock(return_value=event)
+        job_repo.set_lifecycle_status = AsyncMock(return_value=job)
+        alert_repo.auto_resolve_for_job = AsyncMock(return_value=0)
+
+        before = datetime.now(UTC)
+        await service.transition(
+            job=job,
+            to_status=LifecycleStatus.NEEDS_FOLLOW_UP,
+            source=LifecycleEventSource.MANUAL,
+            payload={"note": "no explicit follow-up time given"},
+        )
+        after = datetime.now(UTC)
+
+        assert job.follow_up_at is not None
+        expected_low = before + timedelta(minutes=settings.ALERTS_FOLLOW_UP_DEFAULT_MINUTES)
+        expected_high = after + timedelta(minutes=settings.ALERTS_FOLLOW_UP_DEFAULT_MINUTES)
+        assert expected_low <= job.follow_up_at <= expected_high
+
+        # The event payload persisted the computed fallback too, so the
+        # audit trail shows what time was actually used.
+        event_kwargs = lifecycle_event_repo.create_event.call_args.kwargs
+        assert "follow_up_at" in event_kwargs["payload"]
+
+    @pytest.mark.anyio
+    async def test_explicit_follow_up_at_overrides_default(self):
+        from datetime import UTC, datetime, timedelta
+
+        job = _make_job(lifecycle_status="pending")
+        db = AsyncMock()
+        service = LifecycleService(db)
+
+        from app.repositories import (
+            alert as alert_repo,
+        )
+        from app.repositories import (
+            job as job_repo,
+        )
+        from app.repositories import (
+            job_lifecycle_event as lifecycle_event_repo,
+        )
+
+        event = MagicMock()
+        event.id = uuid4()
+        lifecycle_event_repo.create_event = AsyncMock(return_value=event)
+        job_repo.set_lifecycle_status = AsyncMock(return_value=job)
+        alert_repo.auto_resolve_for_job = AsyncMock(return_value=0)
+
+        explicit = datetime.now(UTC) + timedelta(minutes=30)
+        await service.transition(
+            job=job,
+            to_status=LifecycleStatus.NEEDS_FOLLOW_UP,
+            source=LifecycleEventSource.TECH_WHATSAPP,
+            payload={"follow_up_at": explicit.isoformat()},
+        )
+
+        assert job.follow_up_at == explicit

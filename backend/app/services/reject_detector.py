@@ -292,6 +292,129 @@ _CUSTOMER_UNAVAILABLE_NOTE_RE = re.compile(
 # "No I'm good thanks"), so this really is a cancellation.
 _DNS_RE = re.compile(r"\bdns\b", re.IGNORECASE)
 
+# A re-paste's appended note reporting that the customer never answered the
+# operator OR the dispatched technician ("cx not answering to me or to new
+# technician I left vm", "Cx never answered to us or tech to set appt",
+# "called and texted no answer") is a CANCELLATION outcome, not a plain
+# contact attempt: a tech was already involved and the customer could not be
+# reached, so the job will not be done.
+#
+# This is deliberately narrower than "the operator mentioned a voicemail".
+# ``_CONTACT_ATTEMPT_NOTE_RE`` above matches a *bare* attempt ("stvm left vm
+# and text") and vetoes the reject path because the operator is still
+# working the job. The difference that matters is whether the note reports
+# an OUTCOME ("not answering", "never answered", "no pick up") or merely an
+# ACTION ("left vm"). Only the outcome wording routes to ``canceled``; a
+# bare action still falls through to the ``needs_follow_up`` relay path.
+#
+# Regression: "Co: Always 24/7 / PDL: PY3YA" / 6946 N Overhill Ave, Chicago
+# IL sat at ``pending`` for six days after the operator re-pasted the job
+# with "cx not answering to me or to new technician I left vm". The note
+# matched ``_CONTACT_ATTEMPT_NOTE_RE`` (on "left vm"), which vetoed the
+# reject path, and matched no cancel wording at all — "not answering" was
+# absent from ``_CUSTOMER_UNAVAILABLE_NOTE_RE``, which only covered "no
+# answer" / "no one answering".
+_NO_ANSWER_OUTCOME_RE = re.compile(
+    r"\b(?:not|isn'?t|aren'?t|ain'?t)\s+answer(?:ing|ed)?\b"
+    r"|\b(?:never|didn'?t|did\s+not|doesn'?t|does\s+not|won'?t|wont)\s+answer(?:ing|ed)?\b"
+    r"|\bno\s+answer\b"
+    r"|\bunanswered\b"
+    r"|\b(?:not|isn'?t|never|didn'?t|did\s+not|doesn'?t)\s+pick(?:ing|ed)?\s*(?:up|the\s+phone)\b"
+    r"|\bno\s+pick\s*up\b"
+    r"|\b(?:not|isn'?t|never|didn'?t|did\s+not)\s+respond(?:ing|ed)?\b"
+    r"|\bno\s+response\b"
+    r"|\bunresponsive\b"
+    r"|\b(?:cant|can'?t|cannot|unable\s+to)\s+reach\b"
+    r"|\bcouldn'?t\s+reach\b",
+    re.IGNORECASE,
+)
+
+# Tentative markers that turn a no-answer OUTCOME back into an in-progress
+# attempt: "no answer yet", "not answering for now", "still trying", "will
+# keep trying", "will try again". The operator is explicitly signalling the
+# job is still live, so it must stay non-terminal (the ``needs_follow_up``
+# relay path handles it) rather than being canceled.
+#
+# Observed in production alongside the genuine cancels: "not answering for
+# now" and "no answer yet" are both still-working updates, whereas "Cx never
+# answered to us or tech to set appt" is a settled outcome.
+_TENTATIVE_CONTACT_RE = re.compile(
+    r"\byet\b"
+    r"|\bfor\s+now\b"
+    r"|\bso\s+far\b"
+    r"|\bstill\s+(?:trying|calling|waiting|working)\b"
+    r"|\b(?:will|gonna|going\s+to|ill|i'?ll)\s+(?:keep|try|call|text|reach)\b"
+    r"|\bkeep\s+(?:trying|calling|you\s+posted)\b"
+    r"|\btry(?:ing)?\s+again\b"
+    r"|\bwaiting\s+(?:on|for)\b",
+    re.IGNORECASE,
+)
+
+
+# The subset of :data:`_CUSTOMER_UNAVAILABLE_NOTE_RE` that reports a settled
+# physical fact rather than a failed phone contact — the tech found nobody
+# there, another vendor already handled it, or the customer said DNS. A
+# tentative marker cannot soften these ("already fixed, will keep you
+# posted" is still a cancellation), so they bypass the
+# :data:`_TENTATIVE_CONTACT_RE` veto that applies to answer-related wording.
+_SETTLED_UNAVAILABLE_RE = re.compile(
+    r"\bnot\s+there\s+anymore\b"
+    r"|\b(?:isn'?t|is\s+not|wasn'?t|was\s+not)\s+(?:there|home)\b"
+    r"|\bno\s+(?:one|body)\s+(?:home|there)\b"
+    r"|\bnobody\s+(?:home|there)\b"
+    r"|\b(?:customer|cx|client)\s+(?:gone|left|not\s+(?:home|there))\b"
+    r"|\balready\s+left\b"
+    r"|\b(?:has|have|got|has\s+got)\s+someone(?:\s+(?:on\s*site|there|already))?\b"
+    r"|\bsomeone\s+(?:on\s*site|already\s+there|already\s+came|already\s+fixed(?:\s+it)?)\b"
+    r"|\balready\s+(?:has|have|got)\s+(?:someone|help|a\s+tech)\b"
+    r"|\balready\s+(?:fixed|handled|resolved|taken\s+care\s+of)\b"
+    r"|\bno\s+longer\s+need(?:s|ed)?\b"
+    r"|\bdon'?t\s+need\b|\bnot\s+needed\b"
+    r"|\bdns\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_no_answer_outcome(body: str) -> bool:
+    """True if ``body`` reports a settled "customer never answered" outcome.
+
+    Returns ``False`` when the note carries a tentative marker ("no answer
+    yet", "not answering for now", "still trying") — those mean the operator
+    is still chasing the customer, which is a ``needs_follow_up`` update, not
+    a cancellation. See :data:`_NO_ANSWER_OUTCOME_RE` /
+    :data:`_TENTATIVE_CONTACT_RE`.
+    """
+    text = body or ""
+    if not _NO_ANSWER_OUTCOME_RE.search(text):
+        return False
+    return not _TENTATIVE_CONTACT_RE.search(text)
+
+
+def _looks_like_cancel_note(body: str) -> bool:
+    """True if a re-paste's appended note reports a cancellation outcome.
+
+    Combines the two families:
+    - a settled customer-unavailable fact (:data:`_SETTLED_UNAVAILABLE_RE`),
+      which a tentative marker cannot soften; and
+    - a failed-contact outcome (:func:`_looks_like_no_answer_outcome`),
+      which a tentative marker *does* soften back to an in-progress attempt.
+
+    ``_CUSTOMER_UNAVAILABLE_NOTE_RE`` also carries bare answer-related
+    alternatives ("no answer", "no one answering"). Those are routed through
+    the tentative veto here so "no answer yet" stays a ``needs_follow_up``
+    update instead of canceling the job.
+    """
+    text = body or ""
+    if _SETTLED_UNAVAILABLE_RE.search(text):
+        return True
+    if _looks_like_no_answer_outcome(text):
+        return True
+    # Remaining answer-only wording from _CUSTOMER_UNAVAILABLE_NOTE_RE
+    # ("no one answered") — same tentative-marker rule as above.
+    if _looks_like_customer_unavailable_note(text):
+        return not _TENTATIVE_CONTACT_RE.search(text)
+    return False
+
 
 def is_dns_signal(body: str) -> bool:
     """True if ``body`` contains this shop's "DNS" (does-not-need-service)
@@ -474,6 +597,7 @@ def is_repaste_with_note(body: str, job_body: str) -> bool:
             or _looks_like_payment_note(body)
             or _looks_like_en_route_note(body)
             or _looks_like_customer_unavailable_note(body)
+            or _looks_like_no_answer_outcome(body)
             or _looks_like_contact_attempt_note(body)
             or _looks_like_estimate_pending_note(body)
             or _looks_like_competitor_soft_decline_note(body)
@@ -509,7 +633,8 @@ def is_reject_signal(body: str, job_body: str | None = None) -> bool:
 
 def is_repaste_with_cancel_note(body: str, job_body: str) -> bool:
     """True if ``body`` is a re-paste of ``job_body`` plus a note reporting
-    the customer wasn't there (see :data:`_CUSTOMER_UNAVAILABLE_NOTE_RE`).
+    the customer wasn't there (see :data:`_CUSTOMER_UNAVAILABLE_NOTE_RE`) or
+    never answered (see :func:`_looks_like_no_answer_outcome`).
 
     Same containment/similarity structure as :func:`is_repaste_with_note`,
     but requires the note to positively match the customer-unavailable
@@ -522,7 +647,7 @@ def is_repaste_with_cancel_note(body: str, job_body: str) -> bool:
         return False
     if reply_norm == job_norm:
         return False
-    if not _looks_like_customer_unavailable_note(body):
+    if not _looks_like_cancel_note(body):
         return False
 
     if job_norm in reply_norm:

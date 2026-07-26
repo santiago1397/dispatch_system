@@ -189,6 +189,137 @@ def test_repaste_with_en_route_note_is_not_reject(note: str) -> None:
 @pytest.mark.parametrize(
     "note",
     [
+        "stvm left vm and text",
+        "left vm",
+        "left a voicemail",
+        "left message",
+        "vm and text",
+        "text and vm",
+        "sent a text",
+        "vm x2",
+        "vm",
+        "cx na",
+        "Na",
+    ],
+)
+def test_repaste_with_contact_attempt_note_is_not_reject(note: str) -> None:
+    # Regression: "Co: Always 24/7 / PDL: Q25ML" / 151 Elizabeth Ct, Wood
+    # Dale IL job was marked `rejected` off a re-paste whose only added text
+    # was "stvm left vm and text" — the operator was still trying to reach
+    # the customer, not declining the job. A follow-up message even asked to
+    # "set appt 2-3".
+    reply = JOB_BODY + "\n" + note
+    assert reject_detector.is_repaste_with_note(reply, JOB_BODY) is False
+    assert reject_detector.is_reject_signal(reply, JOB_BODY) is False
+    assert reject_detector.is_cancel_signal(reply, JOB_BODY) is False
+
+
+@pytest.mark.parametrize(
+    "note",
+    [
+        "cx has 40 locks, we are sending estimate, will keep you posted",
+        "sending estimate",
+        "quote sent",
+        "3 quotes were sent",
+        "quoted 230-290",
+        "will keep you posted",
+    ],
+)
+def test_repaste_with_estimate_pending_note_is_not_reject(note: str) -> None:
+    # Regression: "Co: Always 24/7 / PDL: 1DAAR" / 2 Salt Creek Ln,
+    # Hinsdale IL job was marked `rejected` off a re-paste whose only added
+    # text was "cx has 40 locks, we are sending estimate, will keep you
+    # posted" — a later message in the same thread confirmed the estimate
+    # was in fact sent, so the job was still actively open.
+    reply = JOB_BODY + "\n" + note
+    assert reject_detector.is_repaste_with_note(reply, JOB_BODY) is False
+    assert reject_detector.is_reject_signal(reply, JOB_BODY) is False
+    assert reject_detector.is_cancel_signal(reply, JOB_BODY) is False
+
+
+@pytest.mark.parametrize(
+    "note",
+    [
+        "cx already gave the pictures to another technician, he doesnt want to do a job with us",
+        "already gave the photos to another technician",
+        "going with another technician",
+        "went with someone else",
+        "already talking to another company",
+        "chose another company",
+        "went with another company",
+    ],
+)
+def test_repaste_with_competitor_soft_decline_note_is_not_reject(note: str) -> None:
+    # Regression: "Co: Always 24/7 / PDL: P12BB" / 1970 University Ln,
+    # Lisle IL job was marked `rejected` off "cx already gave the pictures
+    # to another technician, he doesnt want to do a job with us" — the same
+    # PDL resurfaced the next day and the operator ended up sending 3
+    # quotes for it. A customer leaning toward a competitor is a soft,
+    # reversible decline, not a terminal reject or cancel.
+    reply = JOB_BODY + "\n" + note
+    assert reject_detector.is_repaste_with_note(reply, JOB_BODY) is False
+    assert reject_detector.is_reject_signal(reply, JOB_BODY) is False
+    assert reject_detector.is_cancel_signal(reply, JOB_BODY) is False
+
+
+@pytest.mark.parametrize(
+    "note",
+    [
+        "Cx said will cb, will ask her parents first",
+        "will cb",
+        "customer will call back",
+        "said she will call",
+    ],
+)
+def test_repaste_with_callback_promise_note_is_not_reject(note: str) -> None:
+    # Regression: "Co: Always 24/7 / PDL: VT6KY" / 619 S Cook St,
+    # Barrington IL job was marked `rejected` off "Cx said will cb, will
+    # ask her parents first" — the customer promising to call back is an
+    # open job, not a decline.
+    reply = JOB_BODY + "\n" + note
+    assert reject_detector.is_reject_signal(reply, JOB_BODY) is False
+    assert reject_detector.is_cancel_signal(reply, JOB_BODY) is False
+
+
+@pytest.mark.parametrize(
+    "note",
+    [
+        "He just wants to know the price. I told him Rekey was $75, and he thought it was too expensive.",
+        "too expensive",
+        "wants to know the price",
+        "price is too high",
+        "wants a better price",
+    ],
+)
+def test_repaste_with_price_negotiation_note_is_not_reject(note: str) -> None:
+    # Regression: "Co: Always 24/7 / PDL: GFU7N" / 4601 W Touhy Ave,
+    # Lincolnwood IL job was marked `rejected` off a price-negotiation
+    # update — the job is still open, waiting on pricing back-and-forth.
+    reply = JOB_BODY + "\n" + note
+    assert reject_detector.is_reject_signal(reply, JOB_BODY) is False
+    assert reject_detector.is_cancel_signal(reply, JOB_BODY) is False
+
+
+@pytest.mark.parametrize(
+    "note",
+    [
+        "CX is booked between 3 to 5",
+        "available between 2 and 4",
+        "free between 1 to 3",
+    ],
+)
+def test_repaste_with_informal_time_window_note_is_not_reject(note: str) -> None:
+    # Regression: "Co: Always 24/7 / PDL: FZUHZ" / 801 Forest Ave,
+    # Wilmette IL job was marked `rejected` off "CX is booked between 3 to
+    # 5" — no am/pm suffix meant the original appt-note regex missed it.
+    reply = JOB_BODY + "\n" + note
+    assert reject_detector.is_reject_signal(reply, JOB_BODY) is False
+    assert reject_detector.is_cancel_signal(reply, JOB_BODY) is False
+
+
+@pytest.mark.parametrize(
+    "note",
+    [
         "she's not there anymore",
         "not there anymore",
         "no one home",
@@ -197,6 +328,17 @@ def test_repaste_with_en_route_note_is_not_reject(note: str) -> None:
         "customer not home",
         "cx gone",
         "already left",
+        "she said has someone on site already",
+        "has someone already",
+        "already has someone",
+        "someone on site already",
+        "already got someone",
+        "already fixed",
+        "already handled",
+        "no longer needed",
+        "don't need it",
+        "already have someone else",
+        "have someone else",
     ],
 )
 def test_repaste_with_customer_unavailable_note_is_cancel_not_reject(note: str) -> None:
@@ -209,6 +351,47 @@ def test_repaste_with_customer_unavailable_note_is_cancel_not_reject(note: str) 
     assert reject_detector.is_reject_signal(reply, JOB_BODY) is False
     assert reject_detector.is_repaste_with_cancel_note(reply, JOB_BODY) is True
     assert reject_detector.is_cancel_signal(reply, JOB_BODY) is True
+
+
+@pytest.mark.parametrize(
+    "note",
+    [
+        "Cx informing DNS",
+        "Cx informed dns anymore",
+        "cx confirm dns",
+        "Cx found his key. DNS",
+        "Cx dns",
+        "DNS any more please check",
+    ],
+)
+def test_repaste_with_dns_note_is_cancel_not_reject(note: str) -> None:
+    # Regression: "Co: Always 24/7 / PDL: B9YRG" / 12161 S Central Ave,
+    # Alsip IL job was left `pending` because the "Cx informing DNS" reply
+    # arrived before the job had been classified, so the reject-candidate
+    # matching never saw it. "DNS" ("does not need service") is this shop's
+    # own standard shorthand, used constantly across many operators' replies.
+    reply = JOB_BODY + "\n" + note
+    assert reject_detector.is_reject_signal(reply, JOB_BODY) is False
+    assert reject_detector.is_cancel_signal(reply, JOB_BODY) is True
+
+
+@pytest.mark.parametrize(
+    "bare",
+    [
+        "dns",
+        "DNS",
+        "60108 saying DNS",
+        "dns",
+    ],
+)
+def test_bare_dns_reply_is_cancel_signal_without_job_body(bare: str) -> None:
+    # A bare "dns" reply is too short to pass the repaste containment/
+    # similarity check, so it needs its own unconditional signal — see
+    # ``is_dns_signal``. Must work even with no ``job_body`` at all, since
+    # callers may not always have one on hand.
+    assert reject_detector.is_dns_signal(bare) is True
+    assert reject_detector.is_cancel_signal(bare, None) is True
+    assert reject_detector.is_cancel_signal(bare, JOB_BODY) is True
 
 
 def test_bare_repaste_without_cancel_note_is_not_cancel() -> None:

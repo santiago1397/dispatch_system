@@ -130,24 +130,32 @@ def _clean_for_match(content: str) -> str:
     return s.strip()
 
 
-def _message_timestamp(message: IncomingMessage) -> datetime | None:
+def _message_timestamp(message: IncomingMessage) -> datetime:
     """Real send time of ``message``, when known — not when we processed it.
 
     WhatsApp messages carry the DOM-scraped timestamp in
     ``raw_payload.timestamp`` (see ``whatsapp.py:ingest_batch``); a batch
     scrape can mirror a message hours or days after it was actually sent,
     so ``message.created_at`` is a poor proxy for "when did this job come
-    in". OpenPhone messages have no such field — ``created_at`` there is
-    already close to real-time (webhook delivery), so ``None`` is fine.
+    in" in that case. OpenPhone messages have no such field, but
+    ``message.created_at`` is a sound fallback there — it's close to
+    real-time for live webhook delivery, AND (unlike ``datetime.now(UTC)``)
+    still correct if this message is classified late/out of band, e.g. a
+    backfill reprocessing a message that failed classification when it
+    first arrived.
+    Regression: reprocessing an orphaned OpenPhone message from weeks
+    earlier stamped ``Job.first_message_at`` with the reprocessing time
+    instead of the message's real ``created_at``, making a 3-week-old dead
+    job look like it had just come in.
     """
     raw = (message.raw_payload or {}) if message.raw_payload else {}
     raw_ts = raw.get("timestamp")
-    if not raw_ts:
-        return None
-    try:
-        return datetime.fromisoformat(raw_ts)
-    except (TypeError, ValueError):
-        return None
+    if raw_ts:
+        try:
+            return datetime.fromisoformat(raw_ts)
+        except (TypeError, ValueError):
+            pass
+    return message.created_at
 
 
 class JobClassificationService:
@@ -410,7 +418,7 @@ class JobClassificationService:
         new_job = await job_repo.create_job(
             self.db,
             company_id=company.id,
-            first_message_at=_message_timestamp(message) or datetime.now(UTC),
+            first_message_at=_message_timestamp(message),
             address_street_number=normalized.street_number,
             address_street_name=normalized.street_name,
             address_city=normalized.city,
@@ -436,7 +444,7 @@ class JobClassificationService:
                 to_status=LifecycleStatus.APPT_SET,
                 source=LifecycleEventSource.CLASSIFICATION,
                 payload={"appt_iso": extraction.scheduled_at},
-                at=_message_timestamp(message) or datetime.now(UTC),
+                at=_message_timestamp(message),
             )
 
         return await self._save_extraction(

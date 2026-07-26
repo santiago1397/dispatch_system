@@ -144,6 +144,13 @@ class Settings(BaseSettings):
     ALERTS_STUCK_IN_PROGRESS_MINUTES: int = 480  # 8 hours
     ALERTS_APPT_PASSED_GRACE_MINUTES: int = 60  # 1 hour after the appt
     ALERTS_CLOSING_GRACE_MINUTES: int = 1440  # 24 hours with no close
+    # A ``needs_follow_up`` transition with no explicit follow-up time
+    # (the LLM intent parsers are instructed to always produce one, but
+    # nothing enforces that in code) gets this fallback, so the job is
+    # still picked up by the ``follow_up_due`` scanner instead of sitting
+    # unmonitored forever — ``closing_missing`` deliberately skips
+    # ``needs_follow_up`` on the assumption ``follow_up_due`` covers it.
+    ALERTS_FOLLOW_UP_DEFAULT_MINUTES: int = 240  # 4 hours
     # After a tech's payment/closing signal marks a Job ``completed``, the
     # operator must file the closing in the "Dispatch Closing" WhatsApp
     # group (natively — we never send). If no matching closing lands within

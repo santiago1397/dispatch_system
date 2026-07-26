@@ -1,6 +1,6 @@
 """Tests for service layer."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -265,6 +265,7 @@ def _make_message(
     from_number: str | None = "+17735551212",
     source: str = MessageSource.OPENPHONE.value,
     raw_payload: dict | None = None,
+    created_at: datetime | None = None,
 ) -> IncomingMessage:
     """Construct an in-memory IncomingMessage with the given fields."""
     return IncomingMessage(
@@ -279,6 +280,7 @@ def _make_message(
         event_type="message.received",
         phone_number_id=None,
         raw_payload=raw_payload if raw_payload is not None else {},
+        created_at=created_at if created_at is not None else datetime.now(UTC),
     )
 
 
@@ -593,18 +595,29 @@ class TestJobClassificationDedup:
         assert create_kwargs["first_message_at"] == real_time
 
     @pytest.mark.anyio
-    async def test_classify_message_falls_back_to_now_without_raw_timestamp(
+    async def test_classify_message_falls_back_to_message_created_at_without_raw_timestamp(
         self, monkeypatch, mock_db_session
     ):
         """A WhatsApp row missing ``raw_payload.timestamp`` (or OpenPhone,
-        which never carries one) falls back to ``datetime.now(UTC)`` —
-        there's no better anchor."""
+        which never carries one) falls back to ``message.created_at`` — NOT
+        ``datetime.now(UTC)``.
+
+        Regression: falling back to "now" corrupted ``first_message_at``
+        whenever a message was classified late/out of band (e.g. a backfill
+        reprocessing a message that failed classification when it first
+        arrived weeks earlier) — a 3-week-old dead job looked freshly
+        posted. ``message.created_at`` is correct in both the live case
+        (created_at ≈ now) and the backfill case (created_at = the real,
+        original time).
+        """
         company = _make_company(
             identification_patterns=[{"patterns": [r"rekey", r"\d{3}-\d{3}-\d{4}"]}],
         )
+        real_created_at = datetime.now(UTC) - timedelta(days=21)
         message = _make_message(
             content="Rekey at 999 Oak Ave, Chicago, IL 60601. 773-555-1212.",
             source=MessageSource.WHATSAPP.value,
+            created_at=real_created_at,
         )
         pending_dj = MagicMock()
         pending_dj.id = uuid4()
@@ -613,7 +626,6 @@ class TestJobClassificationDedup:
 
         _mock_extraction_llm(monkeypatch, address="999 Oak Ave, Chicago, IL 60601")
 
-        before = datetime.now(UTC)
         with (
             patch("app.services.classification.company_repo") as mock_company_repo,
             patch("app.services.classification.job_repo") as mock_job_repo,
@@ -629,10 +641,9 @@ class TestJobClassificationDedup:
 
             svc = JobClassificationService(mock_db_session)
             await svc.classify_message(message)
-        after = datetime.now(UTC)
 
         create_kwargs = mock_job_repo.create_job.await_args.kwargs
-        assert before <= create_kwargs["first_message_at"] <= after
+        assert create_kwargs["first_message_at"] == real_created_at
 
     @pytest.mark.anyio
     async def test_classify_message_outside_window(self, monkeypatch, mock_db_session):

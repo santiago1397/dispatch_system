@@ -72,6 +72,14 @@ _FALLBACK_MAX_RETRIES = 2
 #: transient and cheap to re-attempt once before spending OpenAI tokens.
 _RATE_LIMIT_BACKOFF_S = 2.0
 
+#: langchain-openai 1.x defaults ``with_structured_output`` to
+#: ``json_schema``, i.e. OpenAI's structured-outputs ``.parse()`` path.
+#: MiniMax's OpenAI-compatible endpoint documents ``tools`` but NOT
+#: ``response_format``/json_schema, so the primary is pinned to the
+#: tool-calling method it actually supports. OpenAI keeps the langchain
+#: default so the fallback behaves exactly as every call site did before.
+_MINIMAX_STRUCTURED_METHOD = "function_calling"
+
 _missing_key_warned = False
 
 
@@ -98,7 +106,16 @@ class _ProviderCall:
     timeout: float
     max_retries: int
     top_p: float | None = None
-    model_kwargs: dict = field(default_factory=dict)
+    #: Non-OpenAI request-body fields. MUST NOT be passed via
+    #: ``model_kwargs``: langchain-openai 1.x routes structured output
+    #: through ``AsyncCompletions.parse()``, which validates kwargs
+    #: strictly and raises TypeError on anything it doesn't recognise.
+    #: ``extra_body`` is merged into the HTTP body untouched.
+    extra_body: dict = field(default_factory=dict)
+    #: ``with_structured_output(method=...)``. ``None`` keeps langchain's
+    #: default (``json_schema``), which is what every call site used
+    #: before this module existed.
+    structured_method: str | None = None
 
     @property
     def retry_on_rate_limit(self) -> bool:
@@ -154,6 +171,37 @@ def _warn_missing_primary_key_once() -> None:
     )
 
 
+def _minimax_spec() -> _ProviderCall:
+    """The MiniMax primary. Single definition — the probe uses it too."""
+    return _ProviderCall(
+        provider=MINIMAX,
+        model=settings.MINIMAX_MODEL,
+        base_url=settings.MINIMAX_BASE_URL,
+        api_key=settings.MINIMAX_API_KEY,
+        temperature=_MINIMAX_TEMPERATURE,
+        timeout=_MINIMAX_TIMEOUT_S,
+        max_retries=_PRIMARY_MAX_RETRIES,
+        top_p=_MINIMAX_TOP_P,
+        extra_body={"reasoning_split": True},
+        structured_method=_MINIMAX_STRUCTURED_METHOD,
+    )
+
+
+def _openai_spec(*, base_url: str, api_key: str, temperature: float) -> _ProviderCall:
+    """The OpenAI fallback. Credentials are passed in because the runtime
+    path honours the ``app_settings`` DB override while the probe does not.
+    """
+    return _ProviderCall(
+        provider=OPENAI,
+        model=settings.AI_MODEL,
+        base_url=base_url,
+        api_key=api_key,
+        temperature=temperature,
+        timeout=_OPENAI_TIMEOUT_S,
+        max_retries=_FALLBACK_MAX_RETRIES,
+    )
+
+
 async def _resolve_chain(db: AsyncSession, *, temperature: float) -> list[_ProviderCall]:
     """Build the ordered provider chain for one call.
 
@@ -161,14 +209,10 @@ async def _resolve_chain(db: AsyncSession, *, temperature: float) -> list[_Provi
     existing runtime reconfiguration keeps working untouched.
     """
     fallback_cfg = await AppSettingsService(db).get_llm_config()
-    fallback = _ProviderCall(
-        provider=OPENAI,
-        model=settings.AI_MODEL,
+    fallback = _openai_spec(
         base_url=fallback_cfg.base_url,
         api_key=fallback_cfg.api_key,
         temperature=temperature,
-        timeout=_OPENAI_TIMEOUT_S,
-        max_retries=_FALLBACK_MAX_RETRIES,
     )
 
     if settings.LLM_PROVIDER.strip().lower() != MINIMAX:
@@ -178,18 +222,7 @@ async def _resolve_chain(db: AsyncSession, *, temperature: float) -> list[_Provi
         _warn_missing_primary_key_once()
         return [fallback]
 
-    primary = _ProviderCall(
-        provider=MINIMAX,
-        model=settings.MINIMAX_MODEL,
-        base_url=settings.MINIMAX_BASE_URL,
-        api_key=settings.MINIMAX_API_KEY,
-        temperature=_MINIMAX_TEMPERATURE,
-        timeout=_MINIMAX_TIMEOUT_S,
-        max_retries=_PRIMARY_MAX_RETRIES,
-        top_p=_MINIMAX_TOP_P,
-        model_kwargs={"reasoning_split": True},
-    )
-    return [primary, fallback]
+    return [_minimax_spec(), fallback]
 
 
 def _build_client(spec: _ProviderCall) -> ChatOpenAI:
@@ -203,14 +236,22 @@ def _build_client(spec: _ProviderCall) -> ChatOpenAI:
     }
     if spec.top_p is not None:
         kwargs["top_p"] = spec.top_p
-    if spec.model_kwargs:
-        kwargs["model_kwargs"] = dict(spec.model_kwargs)
+    if spec.extra_body:
+        kwargs["extra_body"] = dict(spec.extra_body)
     return ChatOpenAI(**kwargs)
+
+
+def _build_structured(spec: _ProviderCall, schema: type[T]):
+    """Bind ``schema`` to a provider client using that provider's method."""
+    client = _build_client(spec)
+    if spec.structured_method is None:
+        return client.with_structured_output(schema)
+    return client.with_structured_output(schema, method=spec.structured_method)
 
 
 async def _attempt(spec: _ProviderCall, schema: type[T], prompt: str, *, site: str) -> T:
     """Invoke one provider, retrying once on 429 when that provider allows it."""
-    structured = _build_client(spec).with_structured_output(schema)
+    structured = _build_structured(spec, schema)
     max_attempts = 2 if spec.retry_on_rate_limit else 1
 
     for attempt in range(1, max_attempts + 1):
@@ -311,41 +352,29 @@ async def ainvoke_structured(
     raise last_exc or AssertionError("empty provider chain")  # pragma: no cover
 
 
-def build_probe_client(provider: str, *, temperature: float = 0.0) -> ChatOpenAI:
-    """Build a client for ONE provider, with no DB lookup and no fallback.
+def build_probe_structured(provider: str, schema: type[T], *, temperature: float = 0.0):
+    """Bind ``schema`` to ONE provider, with no DB lookup and no fallback.
 
     Used by the ``llm-smoke`` diagnostic. Probing a single provider in
     isolation is the entire point — the automatic fallback would otherwise
     mask a primary that cannot produce structured output at all.
 
+    Built from the same ``_minimax_spec`` / ``_openai_spec`` the runtime
+    path uses, so the probe can never drift from what production does.
     Credentials come from env only, so this deliberately ignores any
     ``app_settings`` DB override of the OpenAI key.
     """
     if provider == MINIMAX:
-        spec = _ProviderCall(
-            provider=MINIMAX,
-            model=settings.MINIMAX_MODEL,
-            base_url=settings.MINIMAX_BASE_URL,
-            api_key=settings.MINIMAX_API_KEY,
-            temperature=_MINIMAX_TEMPERATURE,
-            timeout=_MINIMAX_TIMEOUT_S,
-            max_retries=_PRIMARY_MAX_RETRIES,
-            top_p=_MINIMAX_TOP_P,
-            model_kwargs={"reasoning_split": True},
-        )
+        spec = _minimax_spec()
     elif provider == OPENAI:
-        spec = _ProviderCall(
-            provider=OPENAI,
-            model=settings.AI_MODEL,
+        spec = _openai_spec(
             base_url=settings.AI_BASE_URL,
             api_key=settings.OPENAI_API_KEY,
             temperature=temperature,
-            timeout=_OPENAI_TIMEOUT_S,
-            max_retries=_FALLBACK_MAX_RETRIES,
         )
     else:  # pragma: no cover - guarded by click.Choice at the call site
         raise ValueError(f"unknown provider {provider!r}")
-    return _build_client(spec)
+    return _build_structured(spec, schema)
 
 
 def _is_degraded() -> bool:

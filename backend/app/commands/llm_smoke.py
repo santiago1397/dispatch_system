@@ -34,7 +34,7 @@ from app.schemas.dispatch_job import (
     JobExtraction,
     TechReplyIntent,
 )
-from app.services.llm import MINIMAX, OPENAI, build_probe_client
+from app.services.llm import MINIMAX, OPENAI, build_probe_structured
 
 #: One representative prompt per production schema. These mirror the shape
 #: of the real prompts (short instruction + a realistic dispatch message)
@@ -111,7 +111,7 @@ def _percentile(values: list[int], pct: float) -> int:
 
 async def _probe_once(provider: str, schema: type, prompt: str) -> tuple[bool, str, int]:
     """Return (ok, detail, latency_ms) for one schema against one provider."""
-    client = build_probe_client(provider).with_structured_output(schema)
+    client = build_probe_structured(provider, schema)
     started = time.monotonic()
     try:
         result = await client.ainvoke(prompt)

@@ -13,7 +13,13 @@ from pydantic import BaseModel, ValidationError
 
 from app.services import llm as llm_module
 from app.services.app_settings import LLMConfig
-from app.services.llm import MINIMAX, OPENAI, ainvoke_structured, describe_chain
+from app.services.llm import (
+    MINIMAX,
+    OPENAI,
+    ainvoke_structured,
+    build_probe_structured,
+    describe_chain,
+)
 
 
 class Sample(BaseModel):
@@ -64,9 +70,11 @@ class _FakeClient:
     def __init__(self, outcomes: list) -> None:
         self.structured = _FakeStructured(outcomes)
         self.schema = None
+        self.method = None
 
-    def with_structured_output(self, schema):
+    def with_structured_output(self, schema, method=None, **kwargs):
         self.schema = schema
+        self.method = method
         return self.structured
 
 
@@ -152,9 +160,14 @@ async def test_minimax_uses_vendor_sampling_and_no_internal_retries(wire, minima
     spec = specs[0]
     assert spec.temperature == 1.0, "MiniMax must use its vendor-specified temperature"
     assert spec.top_p == 0.95
-    assert spec.model_kwargs == {"reasoning_split": True}
     assert spec.max_retries == 0, "LangChain's default of 2 would triple primary latency"
     assert spec.timeout == 20.0
+    # reasoning_split MUST travel via extra_body. Via model_kwargs it reaches
+    # AsyncCompletions.parse(), which rejects unknown kwargs with TypeError.
+    assert spec.extra_body == {"reasoning_split": True}
+    # MiniMax documents `tools` but not response_format/json_schema, and
+    # langchain-openai 1.x defaults to json_schema.
+    assert spec.structured_method == "function_calling"
 
 
 @pytest.mark.anyio
@@ -167,9 +180,12 @@ async def test_fallback_keeps_caller_temperature_and_retries(wire, minimax_prima
     assert fallback.provider == OPENAI
     assert fallback.temperature == 0.1
     assert fallback.top_p is None
-    assert fallback.model_kwargs == {}
+    assert fallback.extra_body == {}
     assert fallback.max_retries == 2
     assert fallback.model == "gpt-4.1"
+    # None keeps langchain's default, i.e. exactly what every call site
+    # did before this module existed.
+    assert fallback.structured_method is None
 
 
 # --- hard failures fall back -----------------------------------------
@@ -329,6 +345,42 @@ async def test_provider_name_is_case_and_space_tolerant(wire, minimax_primary, m
     await _run()
 
     assert [s.provider for s in specs] == [MINIMAX]
+
+
+# --- real client wiring -----------------------------------------------
+# These use the genuine _build_client / _build_structured rather than the
+# `wire` fake. The rest of the suite stubs the factory out, so without
+# these nothing verifies that what we hand LangChain is actually valid.
+
+
+def test_reasoning_split_goes_in_extra_body_not_model_kwargs(minimax_primary):
+    """Regression: model_kwargs reaches AsyncCompletions.parse().
+
+    langchain-openai 1.x routes structured output through .parse(), which
+    validates kwargs strictly and raised
+    ``TypeError: unexpected keyword argument 'reasoning_split'`` on every
+    single call. extra_body is merged into the HTTP body untouched.
+    """
+    client = llm_module._build_client(llm_module._minimax_spec())
+
+    assert client.extra_body == {"reasoning_split": True}
+    assert not client.model_kwargs
+
+
+def test_minimax_structured_output_uses_function_calling(minimax_primary):
+    """MiniMax documents `tools`, not response_format/json_schema.
+
+    Building the runnable also proves LangChain accepts the method name;
+    an invalid one raises at bind time.
+    """
+    runnable = llm_module._build_structured(llm_module._minimax_spec(), Sample)
+    assert runnable is not None
+
+
+def test_probe_builds_for_both_providers(minimax_primary):
+    """The probe shares the runtime specs, so it cannot drift from prod."""
+    for provider in (MINIMAX, OPENAI):
+        assert build_probe_structured(provider, Sample) is not None
 
 
 # --- startup banner ---------------------------------------------------

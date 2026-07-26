@@ -107,6 +107,28 @@ def test_tentative_no_answer_note_is_not_cancel(note: str) -> None:
     assert reject_detector.is_cancel_signal(JOB_BODY + "\n" + note, JOB_BODY) is False
 
 
+@pytest.mark.parametrize(
+    "note",
+    [
+        # An open question means the operator is still working the job.
+        "No answer, check please",
+        "Comment: K?  Called and texted no answer",
+        # This one is about an appointment that exists — canceling it would
+        # be actively wrong.
+        "Appt 9am pls check cx not answering try confirm appt",
+    ],
+)
+def test_no_answer_note_asking_a_question_is_not_cancel(note: str) -> None:
+    assert reject_detector.is_cancel_signal(JOB_BODY + "\n" + note, JOB_BODY) is False
+
+
+def test_no_answer_mentioning_appt_without_asking_is_still_cancel() -> None:
+    # "never answered ... to set appt" references an appointment but asks
+    # nothing, and reports the appointment was never made.
+    note = "please call cx to set appt  Cx never answered to us or tech to set appt"
+    assert reject_detector.is_cancel_signal(JOB_BODY + "\n" + note, JOB_BODY) is True
+
+
 def test_settled_physical_fact_ignores_tentative_marker() -> None:
     # A tentative marker cannot soften a settled fact: the customer already
     # has another vendor on site regardless of "will keep you posted".

@@ -383,11 +383,22 @@ def _looks_like_no_answer_outcome(body: str) -> bool:
     is still chasing the customer, which is a ``needs_follow_up`` update, not
     a cancellation. See :data:`_NO_ANSWER_OUTCOME_RE` /
     :data:`_TENTATIVE_CONTACT_RE`.
+
+    Also returns ``False`` when the note is asking the broker something
+    ("No answer, check please", "Appt 9am pls check cx not answering try
+    confirm appt") — an open question means the operator is still working
+    the job, and one of those observed notes is about an appointment that
+    exists. Reuses the reject path's :func:`_looks_like_data_question` veto
+    rather than a second pattern. Note that "never answered ... to set appt"
+    is *not* vetoed: it mentions an appointment but asks nothing, and
+    reports that the appointment was never made.
     """
     text = body or ""
     if not _NO_ANSWER_OUTCOME_RE.search(text):
         return False
-    return not _TENTATIVE_CONTACT_RE.search(text)
+    if _TENTATIVE_CONTACT_RE.search(text):
+        return False
+    return not _looks_like_data_question(text)
 
 
 def _looks_like_cancel_note(body: str) -> bool:
@@ -407,13 +418,12 @@ def _looks_like_cancel_note(body: str) -> bool:
     text = body or ""
     if _SETTLED_UNAVAILABLE_RE.search(text):
         return True
-    if _looks_like_no_answer_outcome(text):
-        return True
-    # Remaining answer-only wording from _CUSTOMER_UNAVAILABLE_NOTE_RE
-    # ("no one answered") — same tentative-marker rule as above.
-    if _looks_like_customer_unavailable_note(text):
-        return not _TENTATIVE_CONTACT_RE.search(text)
-    return False
+    # Everything left in _CUSTOMER_UNAVAILABLE_NOTE_RE is answer-related
+    # ("no answer", "no one answering"), so it goes through the same
+    # outcome gate — tentative wording and open questions both veto it.
+    if _looks_like_customer_unavailable_note(text) and not _NO_ANSWER_OUTCOME_RE.search(text):
+        return not (_TENTATIVE_CONTACT_RE.search(text) or _looks_like_data_question(text))
+    return _looks_like_no_answer_outcome(text)
 
 
 def is_dns_signal(body: str) -> bool:

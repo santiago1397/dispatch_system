@@ -149,12 +149,14 @@ async def _run(*, apply: bool, days: int, limit: int | None) -> None:
                 continue
 
             openphone_id = message.openphone_id or ""
-            if openphone_id and any(
-                await lifecycle_event_repo.exists_for_openphone_id(
+            already_applied = False
+            for source in _ALREADY_APPLIED_SOURCES:
+                if openphone_id and await lifecycle_event_repo.exists_for_openphone_id(
                     db, source=source, openphone_id=openphone_id
-                )
-                for source in _ALREADY_APPLIED_SOURCES
-            ):
+                ):
+                    already_applied = True
+                    break
+            if already_applied:
                 counts["already_applied"] += 1
                 continue
 

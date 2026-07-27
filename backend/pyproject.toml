@@ -87,6 +87,11 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# ``llm`` marks tests that make real model calls (the company-relay golden
+# corpus). Excluded from the default run so CI stays deterministic and
+# free; run them deliberately with ``pytest -m llm``.
+markers = ["llm: makes real LLM calls; opt-in via -m llm"]
+addopts = "-m 'not llm'"
 
 [tool.fastapi-fullstack]
 generator_version = "0.1.14"

@@ -470,6 +470,46 @@ async def find_reject_candidate_openphone(
     return job, (content or "")
 
 
+async def count_newer_jobs_openphone(
+    db: AsyncSession,
+    *,
+    counterparty: str,
+    after: datetime,
+    until: datetime,
+) -> int:
+    """Count jobs this counterparty texted in during ``(after, until]``.
+
+    Answers "is it ambiguous which job the operator's reply is about?".
+    Zero means the candidate is the only job this broker has posted since,
+    so a decline can only be about that one however many chat messages
+    intervened.
+
+    Backs the late-reject escape hatch in
+    ``OpenPhoneService.maybe_reject_job``: the two-outbound-message cutoff
+    is a proxy for that ambiguity, and a poor one — an operator who answers
+    "Lmc" and "k" before declining has burned the budget without any second
+    job ever arriving.
+    """
+    from app.db.models.dispatch_job import DispatchJob
+    from app.db.models.openphone import IncomingMessage
+
+    query = (
+        select(func.count(func.distinct(Job.id)))
+        .select_from(Job)
+        .join(DispatchJob, DispatchJob.job_id == Job.id)
+        .join(IncomingMessage, IncomingMessage.id == DispatchJob.incoming_message_id)
+        .where(
+            IncomingMessage.source == "openphone",
+            IncomingMessage.direction == "incoming",
+            IncomingMessage.from_number == counterparty,
+            Job.first_message_at > after,
+            Job.first_message_at <= until,
+        )
+    )
+    result = await db.execute(query)
+    return result.scalar_one()
+
+
 # Non-terminal statuses eligible for a company-relay follow-up update.
 # Excludes ``completed``/``closed``/``canceled``/``rejected`` — those jobs
 # are done, so a later "customer never answered" remark in the same thread

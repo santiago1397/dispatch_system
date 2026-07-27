@@ -375,6 +375,73 @@ _SETTLED_UNAVAILABLE_RE = re.compile(
 )
 
 
+# Explicit cancellation wording. The families above cover the *circumstances*
+# that kill a job ("nobody home", "never answered", "already has someone"),
+# but the most common note in production is the operator simply reporting the
+# outcome: "CX called and canceled the service", "Tech were on way and cx
+# canceled", or a bare "Cancel" appended to a re-paste.
+#
+# Regression: "Co: Always 24/7 / PDL: XYM1J" / 21429 English Dr, Frankfort IL
+# sat at ``pending`` after the operator re-pasted the job with "cx canceled
+# the appt because his garage door is working now". No cancel family matched
+# it — the note names no unavailability and no failed contact, only the
+# cancellation itself — so the job was never transitioned. A sweep of every
+# outbound message containing "cancel" found 16 of 22 undetected for the same
+# reason.
+#
+# Only consulted from the re-paste path (:func:`is_repaste_with_cancel_note`),
+# never unconditionally the way :func:`is_dns_signal` is. A re-paste always
+# carries the PDL / phone / address that ``services/job_reference.py`` needs
+# to target the right job; a standalone "cancel" carries no identity keys and
+# would fall back to the near-random "most recent open job from this
+# counterparty" lookup, writing a terminal status onto a guess. In the
+# observed corpus 18 of 22 cancel messages are re-pastes, so the gate costs
+# almost nothing.
+_EXPLICIT_CANCEL_RE = re.compile(
+    r"\bcancell?(?:ed|ing|s|ation)?\b"
+    r"|\bwork(?:ing|s)\s+(?:fine|now)\b"
+    r"|\bfixed\s+it(?:self)?\b",
+    re.IGNORECASE,
+)
+
+# Markers that stop an explicit-cancel token from counting: the cancellation
+# is hypothetical ("probably cancel", "if its cancel we will understand for
+# sure") or negated ("don't cancel"). Bounded to a couple of words before the
+# token so a settled cancel followed by unrelated conditional wording ("cx
+# canceled, if you need anything let me know") still counts.
+_UNSETTLED_CANCEL_RE = re.compile(
+    r"\b(?:if|probably|maybe|might|possibly|perhaps|chance"
+    r"|no|not|dont|don'?t|doesn'?t|didn'?t|won'?t|wont|isn'?t)\b"
+    r"(?:\W+\w+){0,2}?\W+cancell?(?:ed|ing|s|ation)?\b",
+    re.IGNORECASE,
+)
+
+# "working now" said of the *technician* is an in-progress update ("tech is
+# working now"), the opposite of a cancellation. Only the customer's
+# equipment working again ends the job.
+_TECH_WORKING_RE = re.compile(
+    r"\btech(?:nician)?\b(?:\W+\w+){0,2}?\W+work(?:ing|s)\s+(?:fine|now)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_explicit_cancel(body: str) -> bool:
+    """True if ``body`` states outright that the job was canceled.
+
+    Vetoed by hypothetical/negated wording (:data:`_UNSETTLED_CANCEL_RE`), by
+    a technician-progress reading of "working now" (:data:`_TECH_WORKING_RE`),
+    by tentative markers (:data:`_TENTATIVE_CONTACT_RE`), and by open
+    questions (:func:`_looks_like_data_question`) — an operator still asking
+    the broker something is still working the job.
+    """
+    text = body or ""
+    if not _EXPLICIT_CANCEL_RE.search(text):
+        return False
+    if _UNSETTLED_CANCEL_RE.search(text) or _TECH_WORKING_RE.search(text):
+        return False
+    return not (_TENTATIVE_CONTACT_RE.search(text) or _looks_like_data_question(text))
+
+
 def _looks_like_no_answer_outcome(body: str) -> bool:
     """True if ``body`` reports a settled "customer never answered" outcome.
 
@@ -404,9 +471,11 @@ def _looks_like_no_answer_outcome(body: str) -> bool:
 def _looks_like_cancel_note(body: str) -> bool:
     """True if a re-paste's appended note reports a cancellation outcome.
 
-    Combines the two families:
+    Combines three families:
     - a settled customer-unavailable fact (:data:`_SETTLED_UNAVAILABLE_RE`),
-      which a tentative marker cannot soften; and
+      which a tentative marker cannot soften;
+    - an explicit statement that the job was canceled
+      (:func:`_looks_like_explicit_cancel`); and
     - a failed-contact outcome (:func:`_looks_like_no_answer_outcome`),
       which a tentative marker *does* soften back to an in-progress attempt.
 
@@ -417,6 +486,8 @@ def _looks_like_cancel_note(body: str) -> bool:
     """
     text = body or ""
     if _SETTLED_UNAVAILABLE_RE.search(text):
+        return True
+    if _looks_like_explicit_cancel(text):
         return True
     # Everything left in _CUSTOMER_UNAVAILABLE_NOTE_RE is answer-related
     # ("no answer", "no one answering"), so it goes through the same

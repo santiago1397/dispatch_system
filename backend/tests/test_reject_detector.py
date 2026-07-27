@@ -401,6 +401,90 @@ def test_bare_repaste_without_cancel_note_is_not_cancel() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Explicit cancellation wording
+# ---------------------------------------------------------------------------
+#
+# Every note below is a verbatim trailing note from a real outbound OpenPhone
+# message in production. A sweep of all 22 outbound messages containing
+# "cancel" found 16 undetected before ``_EXPLICIT_CANCEL_RE`` existed.
+
+
+@pytest.mark.parametrize(
+    "note",
+    [
+        # The XYM1J regression: names no unavailability and no failed
+        # contact, only the cancellation itself.
+        "cx canceled the appt because his garage door is working now",
+        "CX called and canceled the service",
+        "cx called back to cancel",
+        "CX called to cancel and said he will take care of, office called and text but cx not anwer",
+        "Tech were on way and cx canceled",
+        "CX called me and canceled the service because she was able to open it",
+        "Cx cancelling tech is 5 min away",
+        # A bare "Cancel" appended to a re-paste. Safe here precisely because
+        # it IS a re-paste: the job body above it carries the identity keys.
+        "Cancel",
+        "its cancel",
+    ],
+)
+def test_repaste_with_explicit_cancel_note_is_cancel(note: str) -> None:
+    reply = f"{JOB_BODY}\n\n{note}"
+    assert reject_detector._looks_like_explicit_cancel(note) is True
+    assert reject_detector.is_repaste_with_cancel_note(reply, JOB_BODY) is True
+    assert reject_detector.is_cancel_signal(reply, JOB_BODY) is True
+
+
+@pytest.mark.parametrize(
+    "note",
+    [
+        # Hypothetical — the operator is still trying to save the job.
+        "tech will finish a job by there and check again to go, probably cancel, "
+        "this cx already waiting for someone",
+        "ofc ofc, try save as always do but if its cancel we will understand for sure",
+        # Negated.
+        "cx said don't cancel, he still wants the tech",
+        # An open question is not an outcome.
+        "is tech on site? maybe he can collect service call?",
+        # "working now" said of the technician is progress, not cancellation.
+        "tech is working now, will update after",
+        # No cancellation wording at all.
+        "cx called back",
+        "pls call to close  a price need 65",
+    ],
+)
+def test_repaste_without_settled_cancel_is_not_cancel(note: str) -> None:
+    reply = f"{JOB_BODY}\n\n{note}"
+    assert reject_detector._looks_like_explicit_cancel(note) is False
+    assert reject_detector.is_repaste_with_cancel_note(reply, JOB_BODY) is False
+
+
+def test_known_miss_cancel_note_containing_the_word_check() -> None:
+    # Documented limitation, not an oversight. This is a genuine cancellation
+    # ("...so we cancel"), but ``_looks_like_data_question`` reads the word
+    # "check" in "to check his garage door" as the operator asking the broker
+    # something and vetoes it. That helper is shared with the reject path, so
+    # loosening it here would ripple well beyond cancellations. The failure
+    # direction is the safe one: the job stays ``pending`` (visible, alertable)
+    # instead of being wrongly moved to a terminal status.
+    note = (
+        "The Customer called me now and told me that the insurance company "
+        "send him the guy to check his garage door so we cancel"
+    )
+    assert reject_detector._EXPLICIT_CANCEL_RE.search(note) is not None
+    assert reject_detector._looks_like_data_question(note) is True
+    assert reject_detector._looks_like_explicit_cancel(note) is False
+
+
+def test_explicit_cancel_requires_a_repaste() -> None:
+    # Gated behind the re-paste containment check on purpose: a standalone
+    # cancel carries no PDL/phone/address, so targeting would fall back to
+    # the near-random "most recent open job" lookup. Unlike ``is_dns_signal``,
+    # this never fires without a job body.
+    assert reject_detector.is_cancel_signal("cx canceled the appt", None) is False
+    assert reject_detector.is_cancel_signal("Cancel", None) is False
+
+
+# ---------------------------------------------------------------------------
 # Orchestration: WhatsappService._maybe_reject_job
 # ---------------------------------------------------------------------------
 

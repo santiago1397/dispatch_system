@@ -11,6 +11,8 @@ each blocked by a different gate:
 
 Bodies below are copied verbatim from prod, typos included.
 """
+# ruff: noqa: RUF001 - curly quotes are the point: phone keyboards produce
+# them, and failing to normalize them is one of the bugs under test.
 
 from datetime import UTC, datetime, timedelta
 from typing import ClassVar
@@ -28,6 +30,7 @@ class TestApologeticDeclines:
     # Every outbound message in prod opening with "sorry" that is a decline.
     REAL_DECLINES: ClassVar[list[str]] = [
         "sorry cant do",
+        "Sorry can’t do",  # curly apostrophe, exactly as prod stores it
         "Sorry can't do",
         "Sorry pass",
         "Sorry pass have nobody",
@@ -77,6 +80,15 @@ class TestApologeticDeclines:
     def test_a_bare_apology_is_not_a_decline(self) -> None:
         for body in ("sorry", "sorry!", "sorry about that"):
             assert reject_detector.is_reject_phrase(body) is False
+
+    @pytest.mark.parametrize(
+        "body",
+        ["can’t do", "can’t take", "can’t take this", "pass — can’t do"],
+    )
+    def test_curly_punctuation_normalizes_like_straight(self, body: str) -> None:
+        """Phone keyboards substitute curly quotes and dashes automatically,
+        so these are the forms operators actually send."""
+        assert reject_detector.is_reject_phrase(body) is True
 
 
 def _job(first_message_at: datetime):

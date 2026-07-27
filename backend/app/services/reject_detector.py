@@ -94,7 +94,11 @@ _REPASTE_NOTE_MAX_CHARS = 200
 # 10-char "job" would match almost anything and produce false positives.
 _REPASTE_MIN_JOB_CHARS = 25
 
-_PUNCT_STRIP_RE = re.compile(r"[.,!?;:¡¿*_\-\"'`]+")
+# Curly quotes matter as much as straight ones: phone keyboards substitute
+# them automatically, so an operator typing "can't" on iOS produces
+# "can’t", which did not normalize to "cant" and so matched no reject
+# phrase. "Sorry can’t do" sat undetected in prod for exactly this reason.
+_PUNCT_STRIP_RE = re.compile(r"[.,!?;:¡¿*_\-\"'`‘’“”´–—]+")
 _WS_RE = re.compile(r"\s+")
 
 # A re-paste's appended note that reads as a question or a data-correction

@@ -161,7 +161,7 @@ async def test_minimax_uses_vendor_sampling_and_no_internal_retries(wire, minima
     assert spec.temperature == 1.0, "MiniMax must use its vendor-specified temperature"
     assert spec.top_p == 0.95
     assert spec.max_retries == 0, "LangChain's default of 2 would triple primary latency"
-    assert spec.timeout == 20.0
+    assert spec.timeout == llm_module.settings.MINIMAX_TIMEOUT_SECONDS
     # reasoning_split MUST travel via extra_body. Via model_kwargs it reaches
     # AsyncCompletions.parse(), which rejects unknown kwargs with TypeError.
     assert spec.extra_body == {"reasoning_split": True}
@@ -298,6 +298,57 @@ async def test_rejected_fallback_result_is_still_returned(wire, minimax_primary)
     result = await _run(accept=lambda r: r.confidence >= 0.5)
 
     assert result.value == "b"
+
+
+# --- spurious empty results -------------------------------------------
+
+
+class Wide(BaseModel):
+    """Stands in for JobExtraction: every field optional."""
+
+    address: str | None = None
+    total: str | None = None
+
+
+@pytest.mark.anyio
+async def test_all_null_primary_result_escalates(wire, minimax_primary):
+    """MiniMax returns a spurious all-null object on a minority of calls.
+
+    Without this guard the extraction sites accept it as "the message had
+    no fields" and write an empty job, with nothing reporting a problem.
+    """
+    specs, _ = wire(
+        {
+            MINIMAX: [Wide()],
+            OPENAI: [Wide(address="123 Main St", total="$185")],
+        }
+    )
+
+    result = await ainvoke_structured(AsyncMock(), Wide, "p", site="test")
+
+    assert result.address == "123 Main St"
+    assert [s.provider for s in specs] == [MINIMAX, OPENAI]
+
+
+@pytest.mark.anyio
+async def test_all_null_from_the_final_provider_is_returned(wire, openai_only):
+    """A genuinely empty message must still resolve to an empty result."""
+    wire({OPENAI: [Wide()]})
+
+    result = await ainvoke_structured(AsyncMock(), Wide, "p", site="test")
+
+    assert result.address is None
+
+
+@pytest.mark.anyio
+async def test_timeout_is_read_at_call_time_not_import(wire, minimax_primary, monkeypatch):
+    """Captured at import, the env var would silently have no effect."""
+    monkeypatch.setattr(llm_module.settings, "MINIMAX_TIMEOUT_SECONDS", 12.5)
+    specs, _ = wire({MINIMAX: [Sample(value="ok")]})
+
+    await _run()
+
+    assert specs[0].timeout == 12.5
 
 
 # --- total failure ----------------------------------------------------

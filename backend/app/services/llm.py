@@ -56,10 +56,16 @@ OPENAI = "openai"
 _MINIMAX_TEMPERATURE = 1.0
 _MINIMAX_TOP_P = 0.95
 
-#: MiniMax is a reasoning model, so it is slower than a comparable
-#: non-thinking model. 20s is a ceiling, not a target — exceeding it means
-#: we'd rather pay for OpenAI than leave a job unclassified.
-_MINIMAX_TIMEOUT_S = 20.0
+#: MiniMax is a reasoning model AND json_mode makes it deliberate over the
+#: schema, so it is far slower than a non-thinking model. Measured on
+#: MiniMax-M2.7 against the real prompts: JobExtraction 13-25s, the small
+#: intent schemas 5-11s. (MiniMax-M2.7-highspeed is NOT faster here —
+#: 20-30s on the wide schema.) The 20s first guess timed out constantly,
+#: hence ``settings.MINIMAX_TIMEOUT_SECONDS``, read per call rather than
+#: captured at import so the env var actually takes effect.
+#: Classification runs in a FastAPI BackgroundTask after the webhook has
+#: already responded, so a long ceiling costs throughput, not
+#: user-visible latency.
 _OPENAI_TIMEOUT_S = 30.0
 
 #: LangChain's ChatOpenAI defaults to ``max_retries=2``. Left alone that
@@ -138,6 +144,13 @@ class _ProviderCall:
     #: Paste the JSON Schema into the prompt. Required for ``json_mode``,
     #: which transmits no schema of its own.
     schema_in_prompt: bool = False
+    #: Treat a result whose every field is null as a failure and escalate.
+    #: MiniMax returns a spurious all-null object on a minority of calls
+    #: (observed ~1 in 6 for JobExtraction). Without this the extraction
+    #: sites accept it as "the message had no fields" and write an empty
+    #: job. Only ever set on a NON-final provider, so a genuinely empty
+    #: message just costs one extra call to a provider that agrees.
+    reject_empty: bool = False
 
     @property
     def retry_on_rate_limit(self) -> bool:
@@ -182,6 +195,11 @@ def _elapsed_ms(started: float) -> int:
     return int((time.monotonic() - started) * 1000)
 
 
+def _is_all_null(result: BaseModel) -> bool:
+    """True when every field came back null/blank — a non-answer."""
+    return all(v is None or v == "" for v in result.model_dump().values())
+
+
 def _warn_missing_primary_key_once() -> None:
     global _missing_key_warned
     if _missing_key_warned:
@@ -201,12 +219,13 @@ def _minimax_spec() -> _ProviderCall:
         base_url=settings.MINIMAX_BASE_URL,
         api_key=settings.MINIMAX_API_KEY,
         temperature=_MINIMAX_TEMPERATURE,
-        timeout=_MINIMAX_TIMEOUT_S,
+        timeout=float(settings.MINIMAX_TIMEOUT_SECONDS),
         max_retries=_PRIMARY_MAX_RETRIES,
         top_p=_MINIMAX_TOP_P,
         extra_body={"reasoning_split": True},
         structured_method=_MINIMAX_STRUCTURED_METHOD,
         schema_in_prompt=True,
+        reject_empty=True,
     )
 
 
@@ -367,6 +386,15 @@ async def ainvoke_structured(
                 spec.provider,
                 chain[index + 1].provider,
                 _failure_reason(exc),
+            )
+            continue
+
+        if not is_final and spec.reject_empty and _is_all_null(result):
+            logger.info(
+                "llm_fallback site=%s from=%s to=%s reason=empty_result",
+                site,
+                spec.provider,
+                chain[index + 1].provider,
             )
             continue
 

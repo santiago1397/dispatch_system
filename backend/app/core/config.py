@@ -123,6 +123,10 @@ class Settings(BaseSettings):
     MINIMAX_API_KEY: str = ""
     MINIMAX_BASE_URL: str = "https://api.minimax.io/v1"
     MINIMAX_MODEL: str = "MiniMax-M2.7"
+    # Per-attempt ceiling. Measured on M2.7 with the real prompts:
+    # JobExtraction 13-25s, intent schemas 5-11s. 45s clears the observed
+    # tail with headroom; lower it to fail over to OpenAI sooner.
+    MINIMAX_TIMEOUT_SECONDS: float = 45.0
 
     # === LangSmith (LangChain observability) ===
     LANGCHAIN_TRACING_V2: bool = True

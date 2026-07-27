@@ -43,6 +43,17 @@ class AlertKind(StrEnum):
     # hasn't filed the closing in the "Dispatch Closing" group yet.
     CLOSING_UNFILED = "closing_unfiled"
     UNATTRIBUTED_REPLY = "unattributed_reply"
+    # An operator's relay reply to a company/broker carried a real status
+    # update (a cancellation, an appointment, a no-answer report) but named
+    # no job — no PDL / phone / address in the body, and no keyed message
+    # earlier in the same thread to inherit one from. The update is dropped
+    # rather than guessed at: a single broker can hold 200+ open jobs, so
+    # "most recent open job from this counterparty" is near-random and this
+    # path writes terminal statuses. Keyed on the counterparty number.
+    # Only raised when the intent was actionable — an ordinary ack resolves
+    # to ``none`` and is discarded silently. See
+    # ``services/company_relay_parser.py``.
+    UNATTRIBUTED_UPDATE = "unattributed_update"
     # A tech reply couldn't be matched to ANY dispatch (no quote, and no
     # operator dispatch found in the fallback window) — distinct from
     # ``UNATTRIBUTED_REPLY`` (matched too many). Previously this case was

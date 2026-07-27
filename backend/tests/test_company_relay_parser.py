@@ -75,13 +75,21 @@ def test_contact_attempt_gate_negative(body: str) -> None:
 
 @pytest.mark.anyio
 async def test_no_answer_update_transitions_to_needs_follow_up() -> None:
+    """Unchanged outcome, new attribution.
+
+    The recency fallback (``find_follow_up_candidate_openphone``) was
+    removed — a broker can hold 200+ open jobs, so "most recent" was
+    near-random and this path writes lifecycle state. Attribution now comes
+    from the reference the message names, or a sticky one inherited from
+    the thread. See ``test_company_relay_intent.py``.
+    """
     now = datetime.now(UTC)
     job = SimpleNamespace(id=uuid4(), lifecycle_status="pending")
 
     with (
         patch(
-            "app.repositories.job.find_follow_up_candidate_openphone",
-            new=AsyncMock(return_value=job),
+            "app.services.company_relay_parser._resolve_job",
+            new=AsyncMock(return_value=(job, "reference")),
         ),
         patch(
             "app.services.company_relay_parser._extract_intent",
@@ -89,6 +97,8 @@ async def test_no_answer_update_transitions_to_needs_follow_up() -> None:
                 return_value=SimpleNamespace(
                     intent="no_answer_follow_up",
                     follow_up_at="2026-07-24T00:00:00",
+                    appt_iso=None,
+                    reason=None,
                     notes="left vm",
                 )
             ),
@@ -96,13 +106,13 @@ async def test_no_answer_update_transitions_to_needs_follow_up() -> None:
         patch("app.services.lifecycle.LifecycleService") as ls_cls,
     ):
         ls_cls.return_value.transition = AsyncMock(return_value=uuid4())
-        result = await company_relay_parser.maybe_apply_no_answer_update(
+        result = await company_relay_parser.maybe_apply_relay_update(
             AsyncMock(), _op_msg("Na did not call back lef vm", ts=now)
         )
 
     assert result is True
     kwargs = ls_cls.return_value.transition.await_args.kwargs
-    assert kwargs["to_status"] == "needs_follow_up"
+    assert kwargs["to_status"] is LifecycleStatus.NEEDS_FOLLOW_UP
     assert kwargs["source"] == LifecycleEventSource.OPERATOR_RELAY
     assert kwargs["job"] is job
 
@@ -163,25 +173,48 @@ async def test_llm_none_intent_does_not_transition() -> None:
 
 
 @pytest.mark.anyio
-async def test_no_candidate_job_short_circuits() -> None:
+async def test_no_candidate_job_raises_an_alert_instead_of_guessing() -> None:
+    """Attribution now runs *after* the intent, and failure is visible.
+
+    Previously the candidate lookup ran first and an unmatched message was
+    dropped before the LLM was consulted. That made an unplaceable
+    cancellation indistinguishable from ordinary chatter. The order is now
+    intent-first so an actionable-but-unattributable update can be surfaced
+    as ``unattributed_update`` rather than silently discarded.
+    """
+    from app.db.models.alert import AlertKind
+
     now = datetime.now(UTC)
+    create_alert = AsyncMock()
 
     with (
         patch(
-            "app.repositories.job.find_follow_up_candidate_openphone",
+            "app.services.company_relay_parser._resolve_job",
             new=AsyncMock(return_value=None),
         ),
         patch(
             "app.services.company_relay_parser._extract_intent",
-            new=AsyncMock(),
-        ) as extract,
+            new=AsyncMock(
+                return_value=SimpleNamespace(
+                    intent="no_answer_follow_up",
+                    follow_up_at=None,
+                    appt_iso=None,
+                    reason=None,
+                    notes=None,
+                )
+            ),
+        ),
+        patch("app.repositories.alert.create_or_get_open", new=create_alert),
+        patch("app.services.lifecycle.LifecycleService") as ls_cls,
     ):
-        result = await company_relay_parser.maybe_apply_no_answer_update(
+        ls_cls.return_value.transition = AsyncMock()
+        result = await company_relay_parser.maybe_apply_relay_update(
             AsyncMock(), _op_msg("Na did not call back lef vm", ts=now)
         )
 
     assert result is False
-    extract.assert_not_awaited()
+    ls_cls.return_value.transition.assert_not_awaited()
+    assert create_alert.await_args.kwargs["kind"] == AlertKind.UNATTRIBUTED_UPDATE.value
 
 
 # ---------------------------------------------------------------------------

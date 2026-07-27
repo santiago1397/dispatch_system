@@ -87,6 +87,31 @@ _TERMINAL_STATUSES = {
 }
 
 
+# Statuses a relayed operator remark is allowed to move a job OUT of.
+#
+# An ``operator_relay`` transition is inferred by an LLM from free text an
+# operator typed to a broker, which makes it the weakest signal that can
+# write to a Job. Everything outside this set was set by something
+# stronger — the closing group (``closed``), a payment re-paste
+# (``completed``), an explicit decline (``rejected``), or a settled
+# cancellation — and a later chatty remark in the same thread must not be
+# able to walk it back. Deliberately equal to
+# ``repositories/job.py::_FOLLOW_UP_ELIGIBLE_STATUSES``: the candidate
+# lookups already refuse to return a job outside this set, and this guard
+# makes that a hard rule for every caller rather than a property of one
+# query.
+_RELAY_WRITABLE_FROM_STATUSES = frozenset(
+    {
+        LifecycleStatus.PENDING.value,
+        LifecycleStatus.DISPATCHED.value,
+        LifecycleStatus.ACCEPTED.value,
+        LifecycleStatus.IN_PROGRESS.value,
+        LifecycleStatus.APPT_SET.value,
+        LifecycleStatus.NEEDS_FOLLOW_UP.value,
+    }
+)
+
+
 def _validate_transition(
     *,
     from_status: str,
@@ -98,12 +123,34 @@ def _validate_transition(
     Rules:
     - ``to_status='closed'`` requires ``source='closing_chat'`` (no
       manual close — closing must come through the closing pipeline).
+    - ``source='operator_relay'`` may only move a job out of a
+      non-terminal status (:data:`_RELAY_WRITABLE_FROM_STATUSES`). An
+      LLM-inferred remark is the weakest writer in the system and must not
+      undo a close, a completion, a rejection, or a cancellation.
     - Manual overrides (``source='manual'``) on ``to_status='canceled'``
       REQUIRE a non-empty operator note. The caller (``transition``)
       validates that separately because the note lives in the event
       payload, not in the function signature.
     - All other transitions are permitted.
     """
+    if (
+        source == LifecycleEventSource.OPERATOR_RELAY
+        and from_status not in _RELAY_WRITABLE_FROM_STATUSES
+    ):
+        raise InvalidTransitionError(
+            message=(
+                "A relayed operator update cannot change a job that has "
+                "already reached a settled status. The existing status was "
+                "set by a stronger signal (closing group, payment re-paste, "
+                "or an explicit decline)."
+            ),
+            details={
+                "from": from_status,
+                "to": to_status.value,
+                "source": source,
+            },
+        )
+
     if to_status == LifecycleStatus.CLOSED and source != LifecycleEventSource.CLOSING_CHAT:
         raise InvalidTransitionError(
             message=(

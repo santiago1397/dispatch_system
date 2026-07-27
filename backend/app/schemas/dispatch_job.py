@@ -191,32 +191,74 @@ class TechReplyIntent(BaseModel):
 
 
 # Intent codes for an operator's relay reply back to a company/broker's own
-# number (as opposed to a technician's dispatch chat). Unlike
-# ``TechReplyIntentCode``, this is NOT exhaustive over every possible
-# operator remark — most operator replies in these threads are plain acks
-# ("ok", "ty") that carry no status information at all, so ``none`` is a
-# genuine no-op rather than a forced guess.
-CompanyRelayIntentCode = Literal["no_answer_follow_up", "none"]
+# number (as opposed to a technician's dispatch chat). ``none`` remains a
+# genuine no-op rather than a forced guess: most operator remarks in these
+# threads ("ok", "ty") carry no status information at all.
+#
+# Widened from the original ``no_answer_follow_up | none`` pair because the
+# two-value set silently dropped every other outcome an operator reports in
+# free text. The observed failure: an operator wrote "Cx answered now, said
+# already got help" — an unambiguous cancellation — and the parser had no
+# code to express it, so it returned ``none`` and the job sat ``pending``
+# until the closing_missing alert fired days later. The regex path could
+# not catch it either: ``reject_detector.is_cancel_signal`` only fires on a
+# re-paste of the full job block or a bare "DNS" token, and this was a
+# standalone follow-up sentence.
+CompanyRelayIntentCode = Literal[
+    "no_answer_follow_up",
+    "canceled",
+    "in_progress",
+    "appt_set",
+    "completed",
+    "none",
+]
 
 
 class CompanyRelayIntent(BaseModel):
     """Structured output from AI parsing of an operator→company relay reply.
 
-    Only classifies the one signal the pipeline currently acts on: the
-    operator reporting that the customer hasn't answered / called back and
-    they're still trying (e.g. "Na did not call back lef vm"). This should
-    push an open Job to ``needs_follow_up`` instead of leaving it silently
-    in whatever status it was in — see ``services/company_relay_parser.py``.
+    Classifies the free-text status updates an operator sends back to a
+    dispatch company/broker about a job that is already open. The
+    corresponding lifecycle transition is applied by
+    ``services/company_relay_parser.py``, which maps each code to a
+    ``LifecycleStatus``.
 
-    ``intent='none'`` covers everything else (acks, appointment
-    confirmations, payment relays, unrelated chatter) so a plain "ok"
-    never triggers a lifecycle transition.
+    Intents:
+
+    - ``no_answer_follow_up``: the customer hasn't answered / called back
+      yet and the operator is still trying ("na did not call back lef vm").
+      → ``needs_follow_up``.
+    - ``canceled``: the job will not be done — the customer no longer needs
+      service, got help elsewhere, or called it off ("cx answered now, said
+      already got help"). → ``canceled``. This is a *settled outcome*, not
+      an in-flight attempt; when the operator is still chasing the customer
+      the correct code is ``no_answer_follow_up``.
+    - ``in_progress``: a technician is en route or on site ("tech otw",
+      "tech is there now"). → ``in_progress``.
+    - ``appt_set``: an appointment was scheduled ("cx wants tomorrow 3pm").
+      → ``appt_set``.
+    - ``completed``: the work is done and payment was reported. →
+      ``completed``.
+    - ``none``: anything else — acks, questions, chatter, payment relays
+      with no completion claim. Used whenever the reply does not clearly
+      report one of the outcomes above.
 
     ``follow_up_at`` (only for ``no_answer_follow_up``): the ISO-8601 time
     to try the customer again, computed the same way as
     ``TechReplyIntent.follow_up_at``.
+
+    ``appt_iso`` (only for ``appt_set``): the appointment time in ISO-8601
+    when the reply states one.
+
+    ``reason`` is a short machine code for *why*, mirroring
+    ``TechReplyIntent.reason`` so reporting can group both sources with one
+    vocabulary: ``solved`` (customer no longer needs service / got help
+    elsewhere), ``refused``, ``dns``, ``no_service``, ``priceshopping``,
+    ``will_cb``, ``callback``.
     """
 
     intent: CompanyRelayIntentCode
     follow_up_at: str | None = None
+    appt_iso: str | None = None
+    reason: str | None = None
     notes: str | None = None

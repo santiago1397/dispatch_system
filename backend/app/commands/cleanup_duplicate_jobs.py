@@ -25,9 +25,14 @@ Pass 1 deletes; pass 2 re-links. Both are conservative:
   no better candidate exists the flag is cleared rather than left
   pointing somewhere wrong.
 
-Deleting rows is not reversible, so ``--apply`` snapshots every affected
-Job into ``cleanup_duplicate_jobs_backup`` (created on demand) before
-touching anything.
+Deleting rows is not reversible, so every affected Job is snapshotted into
+``cleanup_duplicate_jobs_backup`` (created on demand) before it changes.
+
+A dry run does the whole thing for real and rolls the transaction back at
+the end, rather than predicting it. Predicting would be wrong: pass 2 has
+to see the post-delete state to pick a surviving parent, so a preview that
+skipped the deletes would report re-parenting onto a row ``--apply`` is
+about to remove.
 
 Dry-run by default. Run with::
 
@@ -125,8 +130,9 @@ async def _run(*, apply: bool) -> None:
 
         deletable = []
         for job in stranded:
-            # delete_if_unreferenced does the real gating; in dry-run we
-            # can't call it (it writes), so mirror its checks read-only.
+            # Mirrors delete_if_unreferenced's guards read-only, purely so
+            # the preview can name the rows before they go. The real gating
+            # is still delete_if_unreferenced's, below.
             events = await db.execute(
                 text("SELECT count(*) FROM job_lifecycle_events WHERE job_id = :id"),
                 {"id": job.id},
@@ -154,7 +160,7 @@ async def _run(*, apply: bool) -> None:
         if len(deletable) > 10:
             click.echo(f"    ... and {len(deletable) - 10} more")
 
-        if apply and deletable:
+        if deletable:
             await _snapshot(db, [j.id for j in deletable], "stranded")
             for job in deletable:
                 if await job_repo.delete_if_unreferenced(db, job.id):
@@ -163,10 +169,17 @@ async def _run(*, apply: bool) -> None:
                     counts["stranded_refused"] += 1
 
         # --- Pass 2: mis-parented duplicates ---------------------------
+        # Deliberately after pass 1, and reading the post-delete state: a
+        # stranded row is not a legitimate parent, so re-parenting must
+        # choose among the jobs that survive. Because pass 1 has already
+        # run in this transaction, ``find_dedup_candidate`` below can no
+        # longer return a deleted row — which is also why the whole run
+        # happens for real and is rolled back for a dry run, rather than
+        # being predicted. A prediction would disagree with the outcome.
         misparented = await _find_misparented(db)
         info(f"Duplicates parented to a different street: {len(misparented)}")
 
-        if apply and misparented:
+        if misparented:
             await _snapshot(db, [c.id for c, _ in misparented], "misparented")
 
         for child, old_parent in misparented:
@@ -188,22 +201,24 @@ async def _run(*, apply: bool) -> None:
             if better is None:
                 click.echo(f"    {str(child.id)[:8]}  {addr:<30.30}  {old} -> (not a duplicate)")
                 counts["reparent_cleared"] += 1
-                if apply:
-                    child.is_duplicate = False
-                    child.duplicate_of = None
+                child.is_duplicate = False
+                child.duplicate_of = None
             else:
                 click.echo(
                     f"    {str(child.id)[:8]}  {addr:<30.30}  {old} -> {str(better.id)[:8]}"
                     f"{' (cross-company)' if is_cross else ''}"
                 )
                 counts["reparent_relinked"] += 1
-                if apply:
-                    child.duplicate_of = better.id
-                    child.is_duplicate = True
+                child.duplicate_of = better.id
+                child.is_duplicate = True
 
+        await db.flush()
         if apply:
-            await db.flush()
             await db.commit()
+        else:
+            # get_db_context commits on a clean exit — undo everything
+            # before it gets the chance.
+            await db.rollback()
 
     verb = "Applied" if apply else "Would apply"
     success(f"{verb}: " + (", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "nothing"))

@@ -167,6 +167,28 @@ class TestDeleteIfUnreferenced:
         db.delete.assert_not_awaited()
 
 
+class TestCleanupQueries:
+    """The repair command's own queries."""
+
+    @pytest.mark.anyio
+    async def test_misparented_query_returns_two_jobs_per_row(self) -> None:
+        """Regression: ``Job.__table__.alias()`` flattens the parent into
+        bare columns, so the second element of each row came back as the
+        parent's first *column* (a raw UUID) instead of a Job."""
+        from app.commands.cleanup_duplicate_jobs import _find_misparented
+
+        db = MagicMock()
+        db.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+        await _find_misparented(db)
+
+        stmt = db.execute.await_args.args[0]
+        described = stmt.column_descriptions
+        assert len(described) == 2, "row must carry the child and its parent"
+        # The alias reports an AliasedClass as its ``entity``; ``type`` is
+        # Job for both, which is what makes row[1] a mapped object.
+        assert all(d["type"] is Job for d in described)
+
+
 class TestReclassifyCleanup:
     """Reclassify must not strand the Job it moved off of."""
 

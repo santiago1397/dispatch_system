@@ -98,6 +98,29 @@ class TestDedupRanking:
         assert rank.index("address_street_name") < rank.index("customer_phone_e164")
 
     @pytest.mark.anyio
+    async def test_ties_are_broken_deterministically(self) -> None:
+        """Two rows can share a first_message_at (the same message
+        reprocessed). Without a final key the winner is arbitrary and
+        repeated runs disagree."""
+        order_by = (await self._captured_sql()).split("ORDER BY", 1)[1]
+        assert "created_at" in order_by
+        assert order_by.index("first_message_at") < order_by.index("created_at")
+
+    @pytest.mark.anyio
+    async def test_excluded_ids_are_not_eligible_parents(self) -> None:
+        sql = await self._captured_sql(exclude_ids=[uuid4()])
+        predicate = sql.split("WHERE", 1)[1].split("ORDER BY", 1)[0]
+        # The id list is an expanding bindparam, so assert on the operator
+        # rather than the rendered UUID.
+        assert "NOT IN" in predicate.upper()
+        assert "jobs.id" in predicate
+
+    @pytest.mark.anyio
+    async def test_empty_exclusion_adds_no_predicate(self) -> None:
+        sql = await self._captured_sql(exclude_ids=[])
+        assert "NOT IN" not in sql.upper()
+
+    @pytest.mark.anyio
     async def test_no_keys_at_all_short_circuits(self) -> None:
         db = MagicMock()
         db.execute = AsyncMock()

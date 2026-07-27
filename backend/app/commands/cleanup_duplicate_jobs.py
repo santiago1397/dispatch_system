@@ -129,6 +129,10 @@ async def _run(*, apply: bool) -> None:
         info(f"Stranded Jobs (no dispatch_job): {len(stranded)}")
 
         deletable = []
+        # Stranded rows kept only because they carry history. They are still
+        # artifacts, so pass 2 must not pick one as a parent — see the
+        # exclude_ids call below.
+        kept_stranded: set = set()
         for job in stranded:
             # Mirrors delete_if_unreferenced's guards read-only, purely so
             # the preview can name the rows before they go. The real gating
@@ -142,6 +146,7 @@ async def _run(*, apply: bool) -> None:
             )
             if events.scalar_one() or children.scalar_one():
                 counts["stranded_kept_has_history"] += 1
+                kept_stranded.add(job.id)
                 continue
             deletable.append(job)
 
@@ -191,6 +196,11 @@ async def _run(*, apply: bool) -> None:
                 street_name=child.address_street_name,
                 customer_phone_e164=None,  # address-only: the phone is what mis-parented it
                 since=since,
+                # A row no message backs is not a legitimate original, even
+                # when history keeps it alive — in prod the one such row had
+                # a closing signal for an entirely different job, attributed
+                # to it through the same shared relay phone.
+                exclude_ids=kept_stranded,
             )
             if better is not None and better.id == child.id:
                 # It is its own oldest address match — it *is* the original.

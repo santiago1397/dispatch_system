@@ -1,6 +1,7 @@
 """Repository for the Job parent record (cross-message dedup key)."""
 
 import uuid
+from collections.abc import Collection
 from datetime import UTC, datetime
 
 from sqlalchemy import and_, case, func, or_, select, text
@@ -111,8 +112,13 @@ async def find_dedup_candidate(
     street_name: str | None,
     customer_phone_e164: str | None,
     since: datetime,
+    exclude_ids: Collection[uuid.UUID] | None = None,
 ) -> tuple[Job | None, bool]:
     """Find the first-seen Job matching the dedup keys.
+
+    ``exclude_ids`` drops specific rows from consideration. The live path
+    never needs it; ``cleanup-duplicate-jobs`` uses it to keep stranded
+    rows — Jobs no message points at — from being chosen as a parent.
 
     A candidate matches when **either** the normalized address
     (street_number AND street_name) matches, **or** the normalized
@@ -169,10 +175,17 @@ async def find_dedup_candidate(
         branches.append((and_(phone_match, same_company), 2))
     match_rank = case(*branches, else_=3)
 
+    filters = [Job.first_message_at >= since, or_(*conditions)]
+    if exclude_ids:
+        filters.append(Job.id.notin_(list(exclude_ids)))
+
     query = (
         select(Job)
-        .where(Job.first_message_at >= since, or_(*conditions))
-        .order_by(match_rank.asc(), Job.first_message_at.asc())
+        .where(*filters)
+        # created_at breaks ties: two rows can share a first_message_at
+        # (the same message reprocessed), and an arbitrary winner would
+        # make repeated runs disagree with each other.
+        .order_by(match_rank.asc(), Job.first_message_at.asc(), Job.created_at.asc())
         .limit(1)
     )
 

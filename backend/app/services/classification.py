@@ -64,6 +64,18 @@ def _is_companys_own_number(company: Company, phone_e164: str | None) -> bool:
             return True
     return False
 
+
+# The same ``(number #extension)`` shape ``_is_companys_own_number``
+# describes, but for a line the company never registered — a broker's
+# call-tracking number fronting many customers, where ``#NNNN`` is the
+# per-customer extension. The extractor returns it as
+# ``customer_phone``; used as an identity it makes every job routed
+# through that line look like a duplicate of the first one seen.
+# Matched on the message body rather than the phone alone, because the
+# bracketed-extension form is the only thing that distinguishes a relay
+# line from a customer who genuinely called twice.
+_RELAY_LINE_RE = re.compile(r"\(\s*\+?1?[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\s*#\s*\d+\s*\)")
+
 # === Job Detection Patterns ===
 
 PHONE_PATTERN = re.compile(
@@ -370,12 +382,18 @@ class JobClassificationService:
             customer_phone_e164 = None
         since = datetime.now(UTC) - timedelta(days=DEDUP_WINDOW_DAYS)
 
+        # A relay line is still the only number we can call, so it stays on
+        # the Job — it just can't be used as an identity for matching.
+        dedup_phone = customer_phone_e164
+        if dedup_phone and _RELAY_LINE_RE.search(match_content or ""):
+            dedup_phone = None
+
         candidate, is_cross_company = await job_repo.find_dedup_candidate(
             self.db,
             company_id=company.id,
             street_number=normalized.street_number,
             street_name=normalized.street_name,
-            customer_phone_e164=customer_phone_e164,
+            customer_phone_e164=dedup_phone,
             since=since,
         )
         if candidate is None:
@@ -624,11 +642,11 @@ class JobClassificationService:
             "- customer_phone: Phone number of the customer (not the dispatcher)\n"
             "- scheduled_at: The appointment/arrival date+time, if mentioned. Messages "
             "often state the date and time window as separate fields (e.g. "
-            "\"Date: 7/10/2026\" and \"Hours: 12:00 PM to 2:00 PM\") — combine them into "
+            '"Date: 7/10/2026" and "Hours: 12:00 PM to 2:00 PM") — combine them into '
             "a single ISO-8601 datetime using the START of the time window and the exact "
             "year given in the message (never assume the current year). "
-            "Example: \"Date: 7/10/2026\" + \"Hours: 12:00 PM to 2:00 PM\" -> "
-            "\"2026-07-10T12:00:00\". If no date/time is mentioned, set to null.\n"
+            'Example: "Date: 7/10/2026" + "Hours: 12:00 PM to 2:00 PM" -> '
+            '"2026-07-10T12:00:00". If no date/time is mentioned, set to null.\n'
             "- job_description: Free-text description of what the job involves\n\n"
             "Only extract values that are clearly present in the message. "
             "Set to null if not found."

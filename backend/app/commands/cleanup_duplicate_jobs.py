@@ -45,6 +45,7 @@ from datetime import timedelta
 
 import click
 from sqlalchemy import func, select, text
+from sqlalchemy.orm import aliased
 
 from app.commands import command, info, success, warning
 from app.db.models.dispatch_job import DispatchJob
@@ -96,14 +97,17 @@ async def _find_stranded(db) -> list[Job]:
 
 async def _find_misparented(db) -> list[tuple[Job, Job]]:
     """Duplicate rows whose parent sits on a different street."""
-    parent = Job.__table__.alias("parent")
+    # aliased(), not Job.__table__.alias() — the latter flattens the parent
+    # into bare columns, so row[1] comes back as the parent's first column
+    # rather than a Job.
+    parent = aliased(Job)
     query = (
         select(Job, parent)
-        .join(parent, parent.c.id == Job.duplicate_of)
+        .join(parent, parent.id == Job.duplicate_of)
         .where(
             Job.is_duplicate.is_(True),
             func.coalesce(Job.address_street_name, "")
-            != func.coalesce(parent.c.address_street_name, ""),
+            != func.coalesce(parent.address_street_name, ""),
         )
         .order_by(Job.first_message_at)
     )

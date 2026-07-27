@@ -198,15 +198,17 @@ async def _run(provider: str, runs: int) -> int:
 
     info("")
     if all_latencies:
+        ceiling_ms = int(settings.MINIMAX_TIMEOUT_SECONDS * 1000) if provider == MINIMAX else 30000
         info(
             f"latency p50={_percentile(all_latencies, 50)}ms "
             f"p95={_percentile(all_latencies, 95)}ms "
-            f"max={max(all_latencies)}ms  (runtime ceiling is 20000ms)"
+            f"max={max(all_latencies)}ms  (ceiling {ceiling_ms}ms)"
         )
-        if provider == MINIMAX and _percentile(all_latencies, 95) > 15000:
+        if provider == MINIMAX and max(all_latencies) > ceiling_ms * 0.8:
             warning(
-                "p95 is close to the 20s timeout — expect frequent fallback to "
-                "OpenAI. Consider MINIMAX_MODEL=MiniMax-M2.7-highspeed."
+                f"Slowest call used >80% of the {ceiling_ms}ms ceiling. Raise "
+                "MINIMAX_TIMEOUT_SECONDS, or accept some fallback to OpenAI. "
+                "Note MiniMax-M2.7-highspeed is NOT faster on wide schemas."
             )
 
     if failed:

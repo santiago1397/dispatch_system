@@ -25,14 +25,12 @@ expected to land hours into a job's life, well past the reject window.
 
 import logging
 
-from langchain_openai import ChatOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.db.models.job_lifecycle_event import LifecycleEventSource
 from app.schemas.dispatch_job import CompanyRelayIntent
 from app.services import reject_detector
-from app.services.app_settings import AppSettingsService
+from app.services.llm import ainvoke_structured
 
 logger = logging.getLogger(__name__)
 
@@ -137,15 +135,6 @@ async def _extract_intent(db: AsyncSession, body: str) -> CompanyRelayIntent:
     """Run the LLM extraction. Mirrors ``tech_reply_parser._extract_intent``."""
     from datetime import UTC, datetime
 
-    llm_config = await AppSettingsService(db).get_llm_config()
-    llm = ChatOpenAI(
-        model=settings.AI_MODEL,
-        temperature=0.0,
-        base_url=llm_config.base_url,
-        api_key=llm_config.api_key,
-    )
-    structured_llm = llm.with_structured_output(CompanyRelayIntent)
-
     now_iso = datetime.now(UTC).isoformat()
     prompt = (
         "You are parsing a short reply an operator sent back to a "
@@ -170,4 +159,4 @@ async def _extract_intent(db: AsyncSession, body: str) -> CompanyRelayIntent:
         f"Reply:\n{body[:500]}\n"
     )
 
-    return await structured_llm.ainvoke(prompt)
+    return await ainvoke_structured(db, CompanyRelayIntent, prompt, site="company_relay_intent")

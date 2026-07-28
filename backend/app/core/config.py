@@ -102,11 +102,31 @@ class Settings(BaseSettings):
     # Together, Groq, local llama.cpp, etc.) — just point AI_BASE_URL
     # at it. The OPENAI_API_KEY var holds whichever provider's key.
     OPENAI_API_KEY: str = ""
-    AI_MODEL: str = "gpt-4o-mini"
+    AI_MODEL: str = "gpt-4.1"
     AI_BASE_URL: str = "https://api.openai.com/v1"
     AI_TEMPERATURE: float = 0.7
     AI_FRAMEWORK: str = "langchain"
+
+    # Which provider serves structured extraction FIRST.
+    # ``openai``  — single provider; identical to the historical behaviour.
+    # ``minimax`` — MiniMax primary with OpenAI as automatic fallback.
+    # Default stays ``openai`` so deploying this code changes nothing until
+    # the flag is deliberately flipped. See app/services/llm.py.
     LLM_PROVIDER: str = "openai"
+
+    # === MiniMax (primary when LLM_PROVIDER=minimax) ===
+    # OpenAI-protocol-compatible endpoint, so the same ChatOpenAI client
+    # drives it. The key is kept separate from OPENAI_API_KEY so both
+    # providers can be configured simultaneously; ``MINIMAX_API_KEY`` is
+    # the same variable app/commands/extract_backfill.py already reads.
+    # Empty key + LLM_PROVIDER=minimax degrades to OpenAI with a warning.
+    MINIMAX_API_KEY: str = ""
+    MINIMAX_BASE_URL: str = "https://api.minimax.io/v1"
+    MINIMAX_MODEL: str = "MiniMax-M2.7"
+    # Per-attempt ceiling. Measured on M2.7 with the real prompts:
+    # JobExtraction 13-25s, intent schemas 5-11s. 45s clears the observed
+    # tail with headroom; lower it to fail over to OpenAI sooner.
+    MINIMAX_TIMEOUT_SECONDS: float = 45.0
 
     # === LangSmith (LangChain observability) ===
     LANGCHAIN_TRACING_V2: bool = True

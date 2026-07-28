@@ -75,6 +75,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     instrument_asyncpg()
 
+    # === LLM provider wiring ===
+    # Announce which provider serves structured extraction. A deploy with
+    # LLM_PROVIDER=minimax but no key is otherwise invisible until the
+    # first classification quietly runs on the fallback.
+    from app.services.llm import ensure_call_logging, log_startup_banner
+
+    ensure_call_logging()
+    log_startup_banner()
+
     # === Process identity + port collision check ===
     # Logs WORKER_START and PORT_COLLISION markers so a stale orphan worker
     # from a previous uvicorn session is loud, not silent. With the orphan

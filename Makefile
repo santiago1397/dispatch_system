@@ -1,4 +1,4 @@
-.PHONY: install format lint test run clean help db-init
+.PHONY: install format lint test test-cov llm-smoke run clean help db-init
 
 # === Setup ===
 install:
@@ -35,6 +35,13 @@ test:
 
 test-cov:
 	uv run --directory backend pytest tests/ -v --cov=app --cov-report=html --cov-report=term-missing
+
+# Live go/no-go probe: can the configured PRIMARY provider actually produce
+# every structured-output schema the app depends on? Requires a real API key
+# and network, so it is deliberately NOT part of `make test`.
+# Must pass before setting LLM_PROVIDER=minimax.
+llm-smoke:
+	uv run --directory backend agents_bots cmd llm-smoke
 
 # === Database ===
 db-init: docker-db

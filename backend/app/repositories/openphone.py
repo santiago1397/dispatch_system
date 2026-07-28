@@ -157,9 +157,7 @@ async def list_threads(
             func.row_number()
             .over(partition_by=_COUNTERPARTY_EXPR, order_by=IncomingMessage.created_at.desc())
             .label("rn"),
-            func.count()
-            .over(partition_by=_COUNTERPARTY_EXPR)
-            .label("message_count"),
+            func.count().over(partition_by=_COUNTERPARTY_EXPR).label("message_count"),
         )
         .where(*filters, _COUNTERPARTY_EXPR.isnot(None))
         .subquery()
@@ -292,3 +290,41 @@ async def count_outbound_messages_to(
     )
     result = await db.execute(query)
     return result.scalar_one()
+
+
+async def list_recent_outbound_bodies(
+    db: AsyncSession,
+    *,
+    counterparty: str,
+    before: datetime,
+    since: datetime,
+    limit: int = 20,
+) -> list[str]:
+    """Return outbound message bodies to ``counterparty`` in ``[since, before)``.
+
+    Newest-first, capped at ``limit``. Backs the *sticky reference* lookup
+    in ``services/company_relay_parser.py``: a follow-up remark like "Cx
+    answered now, said already got help" names no job, but the operator's
+    previous message in the same thread is usually a full re-paste that
+    does. Walking back over these bodies lets the follow-up inherit that
+    job's identity instead of falling back to "most recent open job from
+    this counterparty", which is near-random for a broker holding 200+
+    open jobs.
+
+    Bodies are returned raw; the caller runs ``extract_job_reference`` over
+    them, keeping reference parsing a pure function with no SQL in it.
+    """
+    query = (
+        select(IncomingMessage.content)
+        .where(
+            IncomingMessage.source == MessageSource.OPENPHONE.value,
+            IncomingMessage.direction == "outgoing",
+            IncomingMessage.to_numbers.contains([counterparty]),
+            IncomingMessage.created_at < before,
+            IncomingMessage.created_at >= since,
+        )
+        .order_by(IncomingMessage.created_at.desc())
+        .limit(limit)
+    )
+    result = await db.execute(query)
+    return [row for row in result.scalars().all() if row]

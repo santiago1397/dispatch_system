@@ -82,6 +82,24 @@ _REJECT_KEYWORD_PATTERNS: list = [
     re.compile(r"\bno\s+one\s+available\b", re.IGNORECASE),
     re.compile(r"\bnot\s+available\b", re.IGNORECASE),
     re.compile(r"\bsorry\b.{0,40}\bno\b", re.IGNORECASE),  # "sorry, we have no..."
+    # Capability decline — the job needs a key/part only a dealership can
+    # supply, so this shop cannot do it. Locksmith-domain shorthand, written
+    # bare with no "pass"/"cant" anywhere in it: "only dealer", "Can't only
+    # dealer", "dealer only". Regression: "Co: Always 24/7 / PDL: HTE27" /
+    # 12 , Melrose Park IL (2023 Ford Transit, ignition) sat at ``pending``
+    # after the operator replied "only dealer" 39 seconds after intake — the
+    # phrase list, the ZIP-pass rule and the keyword patterns all missed it,
+    # and the re-paste path never applied because the reply is 11 characters.
+    #
+    # Safe to keep here rather than in the re-paste path because
+    # ``_REJECT_KEYWORD_MAX_TOKENS`` confines it to short replies: the two
+    # long job re-pastes in prod that merely *mention* a dealer both carry a
+    # "Comment: K?" and are vetoed by ``_DATA_QUESTION_RE`` anyway.
+    re.compile(r"\bonly\s+dealer\b", re.IGNORECASE),
+    re.compile(r"\bdealer\s+only\b", re.IGNORECASE),
+    re.compile(r"\bdealer\s+key\s+only\b", re.IGNORECASE),
+    re.compile(r"\b(?:needs?|requires?)\s+(?:a\s+|the\s+)?dealer\b", re.IGNORECASE),
+    re.compile(r"\b(?:has|have)\s+to\s+go\s+to\s+(?:the\s+)?dealer\b", re.IGNORECASE),
 ]
 _REJECT_KEYWORD_MAX_TOKENS = 12
 

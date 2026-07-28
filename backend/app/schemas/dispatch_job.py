@@ -204,8 +204,20 @@ class TechReplyIntent(BaseModel):
 # not catch it either: ``reject_detector.is_cancel_signal`` only fires on a
 # re-paste of the full job block or a bare "DNS" token, and this was a
 # standalone follow-up sentence.
+#
+# ``rejected`` was added for the same class of failure one step earlier in
+# the job's life: the operator declines the job outright, in wording the
+# deterministic ``reject_detector`` phrase list cannot enumerate. The
+# observed case is "only dealer" — locksmith shorthand for "this vehicle
+# needs a dealer-only key, we cannot do it" — which shares no vocabulary
+# with "pass" / "cant take". Without a code for it the model's only honest
+# answer was ``none``, so every decline phrased in domain terms left the job
+# ``pending``. This is the intent set's only way to express "we are not
+# taking this job at all", as distinct from ``canceled`` ("it was ours, and
+# then it fell through").
 CompanyRelayIntentCode = Literal[
     "no_answer_follow_up",
+    "rejected",
     "canceled",
     "in_progress",
     "appt_set",
@@ -228,6 +240,12 @@ class CompanyRelayIntent(BaseModel):
     - ``no_answer_follow_up``: the customer hasn't answered / called back
       yet and the operator is still trying ("na did not call back lef vm").
       → ``needs_follow_up``.
+    - ``rejected``: the operator is declining the job outright — this shop
+      will not take it, usually because it cannot ("only dealer", "we don't
+      have that key", "too far", "no one for that area"). → ``rejected``.
+      The job was never ours, so nothing was attempted. Distinguish from
+      ``canceled``, where the job *was* taken and then fell through on the
+      customer's side.
     - ``canceled``: the job will not be done — the customer no longer needs
       service, got help elsewhere, or called it off ("cx answered now, said
       already got help"). → ``canceled``. This is a *settled outcome*, not
@@ -254,7 +272,9 @@ class CompanyRelayIntent(BaseModel):
     ``TechReplyIntent.reason`` so reporting can group both sources with one
     vocabulary: ``solved`` (customer no longer needs service / got help
     elsewhere), ``refused``, ``dns``, ``no_service``, ``priceshopping``,
-    ``will_cb``, ``callback``.
+    ``will_cb``, ``callback``, plus the ``rejected``-only codes
+    ``dealer_only`` (the vehicle needs a dealer-supplied key/part),
+    ``capability`` (this shop cannot do the work) and ``out_of_area``.
     """
 
     intent: CompanyRelayIntentCode

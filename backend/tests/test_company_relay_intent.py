@@ -493,3 +493,92 @@ async def test_corpus_pre_filter_agreement() -> None:
     for body, expected in GOLDEN_CORPUS:
         if expected != "none":
             assert should_parse(body) is True, f"pre-filter would drop {body!r}"
+
+
+# ---------------------------------------------------------------------------
+# ``rejected`` intent — operator declines the job in the broker thread
+# ---------------------------------------------------------------------------
+#
+# Regression: job ``0964f020`` (Always 24/7, PDL HTE27, Melrose Park, 2023
+# Ford Transit). "only dealer" is locksmith shorthand for "this needs a
+# dealer-supplied key, we can't do it". Before this change the relay intent
+# set had no code for an operator-side decline at all, so even a perfect
+# model read had to answer ``none`` and the job stayed ``pending``.
+
+ONLY_DEALER_UPDATE = "only dealer"
+
+
+def test_rejected_intent_maps_to_rejected_status() -> None:
+    """The intent set can express an operator-side decline."""
+    assert _INTENT_TO_STATUS["rejected"] == LifecycleStatus.REJECTED
+
+
+def test_rejected_is_a_valid_intent_code() -> None:
+    from typing import get_args
+
+    from app.schemas.dispatch_job import CompanyRelayIntentCode
+
+    assert "rejected" in get_args(CompanyRelayIntentCode)
+
+
+def test_only_dealer_survives_the_prefilter() -> None:
+    """The cheap gate must not drop the update before the model sees it."""
+    assert should_parse(ONLY_DEALER_UPDATE) is True
+
+
+def test_relay_may_write_rejected_onto_a_pending_job() -> None:
+    """``operator_relay`` is allowed to move a pending job to ``rejected``."""
+    _validate_transition(
+        from_status=LifecycleStatus.PENDING.value,
+        to_status=LifecycleStatus.REJECTED,
+        source=LifecycleEventSource.OPERATOR_RELAY,
+    )
+
+
+def test_relay_may_not_reject_an_already_settled_job() -> None:
+    """A late "only dealer" cannot undo a close — the relay guard still holds."""
+    with pytest.raises(InvalidTransitionError):
+        _validate_transition(
+            from_status=LifecycleStatus.CLOSED.value,
+            to_status=LifecycleStatus.REJECTED,
+            source=LifecycleEventSource.OPERATOR_RELAY,
+        )
+
+
+@pytest.mark.anyio
+async def test_relay_applies_rejected_transition() -> None:
+    """A ``rejected`` intent transitions the resolved job through the gate."""
+    db = AsyncMock()
+    job = SimpleNamespace(id=uuid4(), lifecycle_status=LifecycleStatus.PENDING.value)
+    reply_at = datetime.now(UTC)
+    msg = SimpleNamespace(
+        content=ONLY_DEALER_UPDATE,
+        openphone_id="OP-HTE27",
+        created_at=reply_at,
+        to_numbers=["+14704714943"],
+    )
+    intent = SimpleNamespace(
+        intent="rejected",
+        follow_up_at=None,
+        appt_iso=None,
+        reason="dealer_only",
+        notes=None,
+    )
+
+    with (
+        patch.object(company_relay_parser, "_extract_intent", new=AsyncMock(return_value=intent)),
+        patch.object(
+            company_relay_parser,
+            "_resolve_job",
+            new=AsyncMock(return_value=(job, "sticky_reference")),
+        ),
+        patch("app.services.lifecycle.LifecycleService") as ls_cls,
+    ):
+        ls_cls.return_value.transition = AsyncMock(return_value=uuid4())
+        applied = await company_relay_parser.maybe_apply_relay_update(db, msg)
+
+    assert applied is True
+    kwargs = ls_cls.return_value.transition.await_args.kwargs
+    assert kwargs["to_status"] == LifecycleStatus.REJECTED
+    assert kwargs["source"] == LifecycleEventSource.OPERATOR_RELAY
+    assert kwargs["payload"]["reason"] == "dealer_only"

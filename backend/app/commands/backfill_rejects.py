@@ -18,12 +18,24 @@ messages and applies the transitions that should have happened.
 
 Safety rules, each one at least as strict as the live path:
 
-1. **Reference-only.** Acted on only when ``services/job_reference.py``
-   pulls a PDL / customer phone / street address out of the body AND
-   ``find_job_by_reference_openphone`` resolves it. The live path may fall
-   back to "most recent open job from this counterparty"; this writes a
-   *terminal* status in bulk, and a broker can hold 100+ concurrent open
-   jobs, so a guess is not good enough.
+1. **Reference first, and recency only when it cannot be wrong.** When
+   ``services/job_reference.py`` pulls a PDL / customer phone / street
+   address out of the body, ``find_job_by_reference_openphone`` resolves it
+   and that is the match.
+
+   Reference-only is not sufficient here, though, and the first version of
+   this command was wrong for exactly that reason: the declines it exists
+   to catch are *bare*. "only dealer" carries no PDL, no phone and no
+   address, so a reference-only rule skipped the very job that motivated
+   the command (1263 of 1921 messages skipped as ``no_reference``).
+
+   So a keyless body falls back to ``find_reject_candidate_openphone``
+   (already pending-only) under a gate strictly *stronger* than the live
+   path's: the reply must be inside the two-outbound-message window AND the
+   broker must have posted no other job in the interval. Production takes
+   either condition; this requires both. Zero competing jobs is the real
+   proof — if no second job arrived between intake and the reply, a decline
+   can only be about the one job on the table.
 2. **Pending-only.** ``statuses=("pending",)`` — a job that has since been
    dispatched, closed, completed or rejected is never touched. Note that
    ``LifecycleService`` does NOT guard transitions out of a terminal state
@@ -101,22 +113,28 @@ async def _run(apply: bool, limit: int | None) -> None:
             continue
 
         reference = extract_job_reference(body)
-        if not reference:
-            # No PDL / phone / address in the body — the live path would fall
-            # back to recency here. We refuse to guess. See rule 1 above.
-            skipped["no_reference"] += 1
-            continue
 
         matched = False
         for counterparty in message.to_numbers or []:
             async with get_db_context() as db:
-                candidate = await job_repo.find_job_by_reference_openphone(
-                    db,
-                    counterparty=counterparty,
-                    before=message.created_at,
-                    reference=reference,
-                    statuses=("pending",),  # rule 2 — never touch a moved job
-                )
+                matched_by = "reference"
+                candidate = None
+                if reference:
+                    candidate = await job_repo.find_job_by_reference_openphone(
+                        db,
+                        counterparty=counterparty,
+                        before=message.created_at,
+                        reference=reference,
+                        statuses=("pending",),  # rule 2 — never touch a moved job
+                    )
+                if candidate is None:
+                    # Bare decline ("only dealer") — no identity keys to match
+                    # on. Already pending-only; the unambiguity gate below is
+                    # what makes this safe. See rule 1.
+                    matched_by = "recency_unambiguous"
+                    candidate = await job_repo.find_reject_candidate_openphone(
+                        db, counterparty=counterparty, before=message.created_at
+                    )
                 if candidate is None:
                     continue
                 job, source_body = candidate
@@ -131,24 +149,29 @@ async def _run(apply: bool, limit: int | None) -> None:
                     skipped["not_a_reject"] += 1
                     break
 
-                # Rule 4 — the live two-outbound-message window, with the
-                # same "no competing newer job" escape hatch.
+                # Rule 4 — the reject window. A reference-matched body names
+                # its own job, so it takes the live path's rule (late is fine
+                # as long as no other job competes). A keyless body matched by
+                # recency must clear BOTH halves: inside the window AND no
+                # other job posted in the interval.
                 outbound_count = await openphone_repo.count_outbound_messages_to(
                     db,
                     counterparty=counterparty,
                     after=job.first_message_at,
                     until=message.created_at,
                 )
-                if outbound_count > 2:
-                    competing = await job_repo.count_newer_jobs_openphone(
-                        db,
-                        counterparty=counterparty,
-                        after=job.first_message_at,
-                        until=message.created_at,
-                    )
-                    if competing:
-                        skipped["too_late_ambiguous"] += 1
-                        break
+                competing = await job_repo.count_newer_jobs_openphone(
+                    db,
+                    counterparty=counterparty,
+                    after=job.first_message_at,
+                    until=message.created_at,
+                )
+                if competing:
+                    skipped["too_late_ambiguous"] += 1
+                    break
+                if matched_by == "recency_unambiguous" and outbound_count > 2:
+                    skipped["keyless_outside_window"] += 1
+                    break
 
                 if message.openphone_id and await lifecycle_event_repo.exists_for_openphone_id(
                     db,
@@ -174,7 +197,7 @@ async def _run(apply: bool, limit: int | None) -> None:
                             "openphone_id": message.openphone_id,
                             "body_preview": body[:120],
                             "operator_msg_index": outbound_count,
-                            "matched_by": "reference",
+                            "matched_by": matched_by,
                             "backfill": True,
                         },
                         at=message.created_at,

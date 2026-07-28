@@ -927,3 +927,76 @@ async def test_openphone_tech_reject_transitions_to_pending() -> None:
 
     assert result == ("tech_openphone", "tech_rejected")
     assert ls_cls.return_value.transition.await_args.kwargs["to_status"] == LifecycleStatus.PENDING
+
+
+# ---------------------------------------------------------------------------
+# Capability declines ("only dealer")
+# ---------------------------------------------------------------------------
+#
+# Regression: job ``0964f020`` (Always 24/7, PDL HTE27, 12 , Melrose Park IL,
+# 2023 Ford Transit ignition). The operator replied "only dealer" 39 seconds
+# after intake — the vehicle needs a dealer-supplied key, so the shop cannot
+# do the job. Every phrase rule missed it (no "pass"/"cant" token) and the
+# re-paste path never applied (the reply is 11 characters), so the job sat at
+# ``pending`` and showed as "Open" on the dashboard.
+
+# The real inbound job block, verbatim.
+DEALER_JOB_BODY = """Co: Always 24/7
+PDL: HTE27
+Ph: 7082241019
+Addr: 12 , Melrose Park, IL, 60160
+Desc: Ignition
+Occu: Locksmith
+
+Notes:
+2023 ford transit"""
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "only dealer",
+        "Only Dealer",
+        "only  dealer",
+        "Can't  only  dealer",
+        "dealer only",
+        "dealer key only",
+        "needs dealer",
+        "needs a dealer key",
+        "requires the dealer",
+        "has to go to the dealer",
+        "sorry only dealer",
+    ],
+)
+def test_capability_decline_is_a_reject(body: str) -> None:
+    """A bare "we can't do this, it's dealer-only" reply reads as a reject."""
+    assert reject_detector.is_reject_phrase(body) is True
+    assert reject_detector.is_reject_signal(body, DEALER_JOB_BODY) is True
+
+
+def test_capability_decline_is_not_a_cancel() -> None:
+    """Declining on our side is ``rejected``, never ``canceled``."""
+    assert reject_detector.is_cancel_signal("only dealer", DEALER_JOB_BODY) is False
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # A full job re-paste that merely *mentions* a dealer, with the
+        # operator asking a question. Both real prod examples carry "K?",
+        # which _DATA_QUESTION_RE already vetoes — but the token-count guard
+        # on the keyword patterns is what keeps the bare-phrase rule from
+        # firing on a long body in the first place.
+        DEALER_JOB_BODY + "\n\nComment: K? cx says the dealer wants 900 for it",
+        DEALER_JOB_BODY + "\n\nCar is lock he wants aftermarket key not dealer, check please",
+    ],
+)
+def test_long_repaste_mentioning_dealer_is_not_a_reject(body: str) -> None:
+    """ "Dealer" inside a long re-paste with a question is not a decline."""
+    assert reject_detector.is_reject_phrase(body) is False
+    assert reject_detector.is_reject_signal(body, DEALER_JOB_BODY) is False
+
+
+def test_dealer_mention_in_normal_sentence_is_not_a_reject() -> None:
+    """A dealer mention that reports progress must not decline the job."""
+    assert reject_detector.is_reject_phrase("tech is at the dealer getting the key") is False

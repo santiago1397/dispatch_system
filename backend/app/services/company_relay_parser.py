@@ -119,6 +119,7 @@ _WS_RE = re.compile(r"\s+")
 # ``schemas/dispatch_job.py:CompanyRelayIntentCode`` AND this dict.
 _INTENT_TO_STATUS: dict[str, LifecycleStatus] = {
     "no_answer_follow_up": LifecycleStatus.NEEDS_FOLLOW_UP,
+    "rejected": LifecycleStatus.REJECTED,
     "canceled": LifecycleStatus.CANCELED,
     "in_progress": LifecycleStatus.IN_PROGRESS,
     "appt_set": LifecycleStatus.APPT_SET,
@@ -331,6 +332,13 @@ async def _extract_intent(db: AsyncSession, body: str) -> CompanyRelayIntent:
         "up', 'tech was arriving but cx stop answering check if can "
         "contact'). The situation is unresolved and someone is still "
         "chasing it.\n"
+        "- rejected: the OPERATOR is declining the job — this shop will "
+        "not take it, usually because it cannot do this particular work "
+        "('only dealer', 'dealer only' (the vehicle needs a dealer-only "
+        "key), 'we dont have that key', 'cant program that one', 'too "
+        "far', 'out of our area', 'no one for that area', 'not our job'). "
+        "Nothing was ever attempted for the customer. Use this rather "
+        "than canceled whenever the reason the job dies is on OUR side.\n"
         "- canceled: the job will NOT be done. The customer no longer "
         "needs service, already got help elsewhere, changed their mind, or "
         "called it off ('cx answered now, said already got help', 'cx "
@@ -348,7 +356,12 @@ async def _extract_intent(db: AsyncSession, body: str) -> CompanyRelayIntent:
         "message does not clearly report one of the outcomes above.\n\n"
         "KEY DISTINCTION: 'still trying / no answer yet' is "
         "no_answer_follow_up, NOT canceled. Only use canceled when the "
-        "message reports that the job is settled and will not happen.\n\n"
+        "message reports that the job is settled and will not happen.\n"
+        "KEY DISTINCTION: rejected vs canceled is about WHOSE side ended "
+        "it. We declined it (capability, distance, pricing we won't do) "
+        "= rejected. The customer ended it or no longer needs it = "
+        "canceled. If the message is a bare capability statement with no "
+        "customer outcome ('only dealer'), that is rejected.\n\n"
         "FIELDS:\n"
         "- follow_up_at (only for no_answer_follow_up): the ISO-8601 time "
         "to try the customer again, computed from the current time above. "
@@ -357,7 +370,9 @@ async def _extract_intent(db: AsyncSession, body: str) -> CompanyRelayIntent:
         "- reason: a short code for WHY, when one applies — 'solved' "
         "(customer no longer needs service / got help elsewhere), "
         "'refused', 'dns', 'no_service', 'priceshopping', 'will_cb', "
-        "'callback'. Omit when none fits.\n"
+        "'callback', plus the rejected-only codes 'dealer_only' (needs a "
+        "dealer key/part), 'capability' (we can't do this work), "
+        "'out_of_area'. Omit when none fits.\n"
         "- notes: any extra detail worth keeping. Omit if none.\n\n"
         f"Message:\n{body[:500]}\n"
     )

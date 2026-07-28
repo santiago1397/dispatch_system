@@ -193,13 +193,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     if not acquired:
                         logging.info("SCHEDULER_DAILY_STATS_SKIPPED reason=lock_held_by_other_worker")
                         return
-                    n = await DailyStatsService(session).snapshot(snapshot_date=yesterday)
+                    service = DailyStatsService(session)
+                    n = await service.snapshot(snapshot_date=yesterday)
                     await session.commit()
                     logging.info(
                         "SCHEDULER_DAILY_STATS_DONE date=%s snapshots=%d",
                         yesterday.isoformat(),
                         n,
                     )
+                    # Address-parse data quality. Read-only, and deliberately
+                    # after the commit + in its own try: a counting query must
+                    # never be able to lose a night of stats.
+                    try:
+                        await service.log_address_quality()
+                    except Exception:
+                        logging.getLogger(__name__).exception(
+                            "Address data-quality check failed — stats snapshot was unaffected"
+                        )
 
             from app.core.timezone import BUSINESS_TZ
 

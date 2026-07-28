@@ -312,14 +312,36 @@ class OpenPhoneService:
             )
             # The two-message cutoff guards the *reject* path only — see the
             # docstring. A cancel legitimately arrives long after intake.
+            #
+            # The cutoff is really a proxy for "could this reply be about a
+            # different job?", and on its own it is a bad one: an operator
+            # who answers "Lmc" and "k" before declining has spent the
+            # budget without a second job ever arriving. So when the count
+            # is blown, fall back to asking the real question — if this
+            # broker has posted no other job since, the decline can only be
+            # about this one.
             if not is_cancel and outbound_count > 2:
+                competing = await job_repo.count_newer_jobs_openphone(
+                    self.db,
+                    counterparty=counterparty,
+                    after=job.first_message_at,
+                    until=reply_at,
+                )
+                if competing:
+                    logger.info(
+                        "OP_REJECT_TOO_LATE openphone_id=%s job_id=%s outbound=%d competing=%d",
+                        message.openphone_id,
+                        job.id,
+                        outbound_count,
+                        competing,
+                    )
+                    continue
                 logger.info(
-                    "OP_REJECT_TOO_LATE openphone_id=%s job_id=%s outbound=%d",
+                    "OP_REJECT_LATE_UNAMBIGUOUS openphone_id=%s job_id=%s outbound=%d",
                     message.openphone_id,
                     job.id,
                     outbound_count,
                 )
-                continue
 
             to_status = LifecycleStatus.CANCELED if is_cancel else LifecycleStatus.REJECTED
             source = (

@@ -75,6 +75,11 @@ class DispatchJobService:
 
         classification_svc = JobClassificationService(self.db)
 
+        # Remember where this message used to point. Re-classification may
+        # land it on a different Job (or mint a new one), which leaves the
+        # previous Job referenced by nothing — see the cleanup below.
+        previous_job_id = job.job_id
+
         # Reset job to pending and re-classify. The dedup step will reassign
         # job_id and classification_status; we clear them here so a stale
         # link doesn't survive a reclassify.
@@ -103,6 +108,21 @@ class DispatchJobService:
         )
 
         await classification_svc.classify_message(message)
+        await self.db.refresh(job)
+
+        # Drop the Job we just moved off of, if re-classification left it
+        # with no children and no history. Without this every reclassify
+        # strands a ``pending`` row that no message backs, which still
+        # counts as open work and still raises ``undispatched`` alerts.
+        # ``delete_if_unreferenced`` is the one deciding whether it's inert.
+        moved_off = previous_job_id is not None and job.job_id != previous_job_id
+        if moved_off and await job_repo.delete_if_unreferenced(self.db, previous_job_id):
+            logger.info(
+                "RECLASSIFY dispatch_job_id=%s removed_stranded_job_id=%s",
+                job_id,
+                previous_job_id,
+            )
+
         return job
 
     async def rematch_closing(self, dispatch_job_id) -> DispatchJob:

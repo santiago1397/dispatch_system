@@ -94,7 +94,11 @@ _REPASTE_NOTE_MAX_CHARS = 200
 # 10-char "job" would match almost anything and produce false positives.
 _REPASTE_MIN_JOB_CHARS = 25
 
-_PUNCT_STRIP_RE = re.compile(r"[.,!?;:¡¿*_\-\"'`]+")
+# Curly quotes matter as much as straight ones: phone keyboards substitute
+# them automatically, so an operator typing "can't" on iOS produces
+# "can’t", which did not normalize to "cant" and so matched no reject
+# phrase. "Sorry can’t do" sat undetected in prod for exactly this reason.
+_PUNCT_STRIP_RE = re.compile(r"[.,!?;:¡¿*_\-\"'`‘’“”´–—]+")
 _WS_RE = re.compile(r"\s+")
 
 # A re-paste's appended note that reads as a question or a data-correction
@@ -594,6 +598,24 @@ def _normalize(text: str) -> str:
 # so the human-readable source list and the match set stay in sync.
 _NORMALIZED_REJECT_PHRASES: frozenset[str] = frozenset(_normalize(p) for p in REJECT_PHRASES)
 
+# Operators soften a decline with an apology: "sorry cant do", "Sorry pass",
+# "Sorry pass have nobody". Every phrase rule below anchors on the decline
+# leading the message, so the apology hid all of them — "cant do" matched
+# while "sorry cant do" did not, and 8 of the 9 apologetic declines in prod
+# went undetected. Stripped and re-tested rather than added to
+# REJECT_PHRASES, which would need a second entry per phrase and still miss
+# "sry"/"srry" and the "guys"/"we" filler.
+#
+# Deliberately only a prefix strip: what follows still has to be a reject
+# phrase on its own, so "sorry the technician got stuck in traffic" and
+# "Sorry it's Ooa" stay non-declines.
+_APOLOGY_PREFIX_RE = re.compile(r"^(?:so+rry|sry|srry|sorr?y)\s+(?:guys\s+|we\s+|but\s+)?")
+
+
+def _strip_apology(normalized: str) -> str:
+    """Drop a leading apology from already-normalized text."""
+    return _APOLOGY_PREFIX_RE.sub("", normalized, count=1).strip()
+
 
 def is_reject_phrase(body: str) -> bool:
     """True if ``body`` is a standalone operator reject phrase.
@@ -611,6 +633,15 @@ def is_reject_phrase(body: str) -> bool:
     Does NOT consider re-pastes — use :func:`is_reject_signal` for that.
     """
     normalized = _normalize(body)
+    if not normalized:
+        return False
+    return _is_reject_phrase_normalized(normalized) or _is_reject_phrase_normalized(
+        _strip_apology(normalized)
+    )
+
+
+def _is_reject_phrase_normalized(normalized: str) -> bool:
+    """The phrase rules of :func:`is_reject_phrase`, on already-normalized text."""
     if not normalized:
         return False
     if normalized in _NORMALIZED_REJECT_PHRASES:

@@ -1,6 +1,7 @@
 """Repository for the Job parent record (cross-message dedup key)."""
 
 import uuid
+from collections.abc import Collection
 from datetime import UTC, datetime
 
 from sqlalchemy import and_, case, func, or_, select, text
@@ -9,6 +10,7 @@ from sqlalchemy.orm import selectinload
 
 from app.db.models.dispatch_job import DispatchJob
 from app.db.models.job import Job
+from app.db.models.job_lifecycle_event import JobLifecycleEvent
 from app.db.models.openphone import IncomingMessage
 
 
@@ -66,6 +68,42 @@ async def get_job_by_id(db: AsyncSession, job_id: uuid.UUID) -> Job | None:
     return await db.get(Job, job_id)
 
 
+async def delete_if_unreferenced(db: AsyncSession, job_id: uuid.UUID) -> bool:
+    """Delete a Job that nothing points at any more. Returns True if removed.
+
+    A reclassify re-runs the pipeline over the same message and may land it
+    on a different Job. The Job it *used* to point at is then referenced by
+    nothing — but it stays in the table as ``pending`` forever, inflating
+    the open-job count and raising ``undispatched`` alerts about work that
+    is being tracked under a different row.
+
+    Only deletes when the row is genuinely inert: no ``DispatchJob``
+    children, no lifecycle history, and not named as another Job's
+    ``duplicate_of`` parent (the FK is ``ON DELETE SET NULL``, so deleting
+    a parent would silently unlink its children rather than fail). Alerts
+    are ``ON DELETE CASCADE`` and go with it — that is the point, they
+    describe a job that no longer exists.
+    """
+    job = await db.get(Job, job_id)
+    if job is None:
+        return False
+
+    for model, column in (
+        (DispatchJob, DispatchJob.job_id),
+        (JobLifecycleEvent, JobLifecycleEvent.job_id),
+        (Job, Job.duplicate_of),
+    ):
+        referenced = await db.execute(
+            select(func.count()).select_from(model).where(column == job_id)
+        )
+        if referenced.scalar_one():
+            return False
+
+    await db.delete(job)
+    await db.flush()
+    return True
+
+
 async def find_dedup_candidate(
     db: AsyncSession,
     *,
@@ -74,8 +112,13 @@ async def find_dedup_candidate(
     street_name: str | None,
     customer_phone_e164: str | None,
     since: datetime,
+    exclude_ids: Collection[uuid.UUID] | None = None,
 ) -> tuple[Job | None, bool]:
     """Find the first-seen Job matching the dedup keys.
+
+    ``exclude_ids`` drops specific rows from consideration. The live path
+    never needs it; ``cleanup-duplicate-jobs`` uses it to keep stranded
+    rows — Jobs no message points at — from being chosen as a parent.
 
     A candidate matches when **either** the normalized address
     (street_number AND street_name) matches, **or** the normalized
@@ -92,7 +135,21 @@ async def find_dedup_candidate(
       (informational duplicate — caller creates a new Job with
       ``is_duplicate=True`` and ``duplicate_of=candidate.id``).
 
-    The first-seen (oldest) candidate is returned when multiple match.
+    Candidates are ranked by **match strength first, age second**:
+
+    0. address match, same company
+    1. address match, other company
+    2. phone match, same company
+    3. phone match, other company
+
+    Age alone is not enough. Ordering purely by ``first_message_at`` lets
+    an older, weaker phone hit shadow the exact address hit on the right
+    job — and when that older job belongs to another company, the caller
+    takes the cross-company branch and *creates a new Job* instead of
+    linking, so two messages about one address become two Jobs parented
+    to a third, unrelated one. Ranking address above phone, and the
+    caller's own company above a stranger's, keeps the strongest
+    available signal in charge.
     """
     address_match = None
     if street_number and street_name:
@@ -109,10 +166,26 @@ async def find_dedup_candidate(
     if not conditions:
         return None, False
 
+    same_company = Job.company_id == company_id
+    branches = []
+    if address_match is not None:
+        branches.append((and_(address_match, same_company), 0))
+        branches.append((address_match, 1))
+    if phone_match is not None:
+        branches.append((and_(phone_match, same_company), 2))
+    match_rank = case(*branches, else_=3)
+
+    filters = [Job.first_message_at >= since, or_(*conditions)]
+    if exclude_ids:
+        filters.append(Job.id.notin_(list(exclude_ids)))
+
     query = (
         select(Job)
-        .where(Job.first_message_at >= since, or_(*conditions))
-        .order_by(Job.first_message_at.asc())
+        .where(*filters)
+        # created_at breaks ties: two rows can share a first_message_at
+        # (the same message reprocessed), and an arbitrary winner would
+        # make repeated runs disagree with each other.
+        .order_by(match_rank.asc(), Job.first_message_at.asc(), Job.created_at.asc())
         .limit(1)
     )
 
@@ -395,6 +468,46 @@ async def find_reject_candidate_openphone(
         return None
     job, content = row
     return job, (content or "")
+
+
+async def count_newer_jobs_openphone(
+    db: AsyncSession,
+    *,
+    counterparty: str,
+    after: datetime,
+    until: datetime,
+) -> int:
+    """Count jobs this counterparty texted in during ``(after, until]``.
+
+    Answers "is it ambiguous which job the operator's reply is about?".
+    Zero means the candidate is the only job this broker has posted since,
+    so a decline can only be about that one however many chat messages
+    intervened.
+
+    Backs the late-reject escape hatch in
+    ``OpenPhoneService.maybe_reject_job``: the two-outbound-message cutoff
+    is a proxy for that ambiguity, and a poor one — an operator who answers
+    "Lmc" and "k" before declining has burned the budget without any second
+    job ever arriving.
+    """
+    from app.db.models.dispatch_job import DispatchJob
+    from app.db.models.openphone import IncomingMessage
+
+    query = (
+        select(func.count(func.distinct(Job.id)))
+        .select_from(Job)
+        .join(DispatchJob, DispatchJob.job_id == Job.id)
+        .join(IncomingMessage, IncomingMessage.id == DispatchJob.incoming_message_id)
+        .where(
+            IncomingMessage.source == "openphone",
+            IncomingMessage.direction == "incoming",
+            IncomingMessage.from_number == counterparty,
+            Job.first_message_at > after,
+            Job.first_message_at <= until,
+        )
+    )
+    result = await db.execute(query)
+    return result.scalar_one()
 
 
 # Non-terminal statuses eligible for a company-relay follow-up update.
@@ -764,7 +877,11 @@ async def get_company_status_breakdown(
 
     Returns ``(company_id, bucket, count)`` rows. Jobs with no company
     match (``company_id IS NULL``) are excluded — they never reached
-    classification and have no company to report against.
+    classification and have no company to report against. Jobs flagged
+    ``is_duplicate`` are excluded too: they are a second row describing a
+    real-world job already counted under ``duplicate_of``, so leaving them
+    in double-counts the work. ``get_company_status_jobs`` applies the
+    same filter so the drill-down rows always add up to the count.
     """
     bucket = _status_bucket_case().label("bucket")
 
@@ -772,6 +889,7 @@ async def get_company_status_breakdown(
         select(Job.company_id, bucket, func.count().label("count"))
         .where(
             Job.company_id.is_not(None),
+            Job.is_duplicate.is_(False),
             _in_range_membership(start, end, include_scheduled_appts=include_scheduled_appts),
         )
         .group_by(Job.company_id, bucket)
@@ -808,6 +926,7 @@ async def get_company_status_jobs(
     bucket_expr = _status_bucket_case().label("bucket")
     conditions = [
         Job.company_id == company_id,
+        Job.is_duplicate.is_(False),
         _in_range_membership(start, end, include_scheduled_appts=include_scheduled_appts),
     ]
     if bucket is not None:

@@ -35,7 +35,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.timezone import business_day_bounds
@@ -46,6 +46,7 @@ from app.db.models.job_lifecycle_event import (
     LifecycleEventSource,
 )
 from app.repositories import daily_stats as stats_repo
+from app.services.address_normalizer import ZIP_PREFIX_BY_STATE
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +137,62 @@ class DailyStatsService:
             per_company_count,
         )
         return total
+
+    async def log_address_quality(self) -> dict[str, int]:
+        """Emit a nightly count of addresses that parsed implausibly.
+
+        The ZIP-extraction bug accumulated 85 bad rows over months without
+        anyone noticing, because nothing ever counted them. The per-parse
+        warning in ``address_normalizer`` catches each occurrence but lives
+        in logs that rotate; this is the trend line. Read-only — it reports,
+        it never repairs. ``backfill-address-zip`` is the repair.
+
+        Called from the nightly scheduler job in ``main.py`` rather than
+        from :meth:`snapshot`, which stays a pure rollup.
+        """
+        zip_is_house_number = func.count().filter(
+            and_(
+                Job.address_zip.is_not(None),
+                Job.address_zip == Job.address_street_number,
+            )
+        )
+        implausible = func.count().filter(
+            or_(
+                *[
+                    and_(
+                        Job.address_state == state,
+                        Job.address_zip.is_not(None),
+                        ~or_(*[Job.address_zip.startswith(p) for p in prefixes]),
+                    )
+                    for state, prefixes in ZIP_PREFIX_BY_STATE.items()
+                ]
+            )
+        )
+        no_state = func.count().filter(Job.address_state.is_(None))
+
+        row = (
+            await self.db.execute(
+                select(zip_is_house_number, implausible, no_state, func.count()).select_from(Job)
+            )
+        ).one()
+        counts = {
+            "zip_is_house_number": row[0] or 0,
+            "implausible_zip": row[1] or 0,
+            "no_state": row[2] or 0,
+            "total_jobs": row[3] or 0,
+        }
+
+        # WARNING when dirty so it surfaces in production, where only
+        # WARNING and above reach stderr (see app/main.py).
+        emit = logger.warning if (counts["zip_is_house_number"] or counts["implausible_zip"]) else logger.info
+        emit(
+            "DATA_QUALITY_ADDRESS total_jobs=%d zip_is_house_number=%d implausible_zip=%d no_state=%d",
+            counts["total_jobs"],
+            counts["zip_is_house_number"],
+            counts["implausible_zip"],
+            counts["no_state"],
+        )
+        return counts
 
     # -----------------------------------------------------------------
     # per_job
